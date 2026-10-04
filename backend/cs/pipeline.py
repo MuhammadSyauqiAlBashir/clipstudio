@@ -13,7 +13,7 @@ import shutil
 import time
 from pathlib import Path
 
-from . import ai, captions, config, db, faces, fetch, gate, groq, media, moments, push, render
+from . import ai, captions, config, db, faces, fetch, gate, groq, media, moments, publish, push, render
 
 log = logging.getLogger("cs.pipeline")
 
@@ -294,6 +294,7 @@ async def final(clip_id: int):
         raise
     db.update("clips", clip_id, {"status": "ready", "final": str(out), "final_size": out.stat().st_size, "note": "",
                                  "updated_at": db.now()})
+    publish.queue_for(clip_id)
     await push.send("✅ Clip ready to post", (clip["hook"] or src["title"])[:90], url=f"/#clip/{clip_id}",
                     tag=f"clip{clip_id}")
 
