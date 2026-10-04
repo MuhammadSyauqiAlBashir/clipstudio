@@ -87,14 +87,14 @@ the .jsonl).
 
 ## Open owner tasks (remind at session start)
 
-- [ ] Check whether the Biznet plan has a monthly data-transfer limit (each hour of 1080p source downloads ~1.5–3 GB).
 - [ ] List the first sources: YouTube/Twitch/Kick channels that allow clipping, and/or clipping campaigns (Whop
       Content Rewards, etc.).
 - [ ] Before posting: create new TikTok, YouTube and Instagram accounts just for clips.
 - [ ] Before Phase 2: free Twitch developer app (dev.twitch.tv, Twitch account with 2FA) and Kick developer app;
       Claude guides click by click and gives hidden-input commands for the keys.
 - [ ] Only if YouTube blocks downloads: one throwaway YouTube account for cookies.
-- Done 2026-10-04: interview; Groq account + key; YouTube Data API v3 enabled + restricted key (both tested).
+- Done 2026-10-04: interview; Groq account + key; YouTube Data API v3 enabled + restricted key (both tested);
+  Biznet traffic checked: NEO Lite (SS 2.2) has unlimited traffic, no quota.
 
 ## History
 

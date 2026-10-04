@@ -150,7 +150,8 @@ replay/VOD after it ends.
 
 Rules: one processing job at a time (+ one recording); low priority; refuse new downloads when free disk < 10 GB;
 heavy jobs ideally when no Claude/VS Code session is open (each Claude session ~220–370 MB, VS Code remote ~300 MB).
-Network: ~1.5–3 GB download per hour of 1080p source; **check the Biznet plan's transfer allowance** (still open).
+Network: ~1.5–3 GB download per hour of 1080p source; Biznet NEO Lite traffic is **unlimited, no quota** (checked
+2026-10-04 on biznetgio.com), so only disk and time limit how much we download.
 No server upgrade needed for v1.
 
 ## 7. Free services and quotas
@@ -216,7 +217,7 @@ Target platforms: **TikTok, YouTube Shorts, Instagram Reels**, on **new accounts
 | 12 | Login | `clips.bashir.my.id`; `bashirsyauqi` and `bells` |
 | 13 | Git | BashGames flow: work on `develop`, push → PR → merge to `main` |
 
-Still open: the Biznet transfer allowance; the actual channel list / campaigns; Twitch + Kick developer apps (needed
+Still open: the actual channel list / campaigns; Twitch + Kick developer apps (needed
 for Phase 2); the clip accounts on TikTok/YouTube/Instagram (needed before posting).
 
 ## 12. Risks
