@@ -64,7 +64,11 @@ async function render() {
 
 function autoRefresh(ms) {
   clearTimeout(refreshTimer)
-  refreshTimer = setTimeout(() => { if (!document.querySelector("dialog[open]") && !document.querySelector("video:not([paused])")) render() }, ms)
+  refreshTimer = setTimeout(() => {
+    const playing = [...document.querySelectorAll("video")].some((v) => !v.paused)
+    if (document.querySelector("dialog[open]") || playing) autoRefresh(ms)
+    else render()
+  }, ms)
 }
 
 window.addEventListener("hashchange", render)

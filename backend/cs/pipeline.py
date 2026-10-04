@@ -342,7 +342,8 @@ def cleanup():
         clips_root = wd / "clips"
         if clips_root.exists():
             shutil.rmtree(clips_root, ignore_errors=True)
-        db.update("sources", src["id"], {"files_deleted": 1, "file": ""})
+        db.update("sources", src["id"], {"files_deleted": 1, "file": "",
+                                         **({"status": "done"} if src["status"] == "review" else {})})
         db.execute("UPDATE clips SET preview='', thumb='' WHERE source_id=?", (src["id"],))
     for c in db.all("SELECT * FROM clips WHERE final!='' AND status IN ('posted','rejected','expired') AND "
                     "updated_at < ?", (now - config.KEEP_CLIP_DAYS * 86400,)):

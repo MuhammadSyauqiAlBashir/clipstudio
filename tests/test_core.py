@@ -189,3 +189,30 @@ def test_db_settings_usage_seen():
     db.usage_add("groq_seconds", 5)
     assert db.usage_get("groq_seconds") == 15
     assert db.mark_seen("youtube", "v1") and not db.mark_seen("youtube", "v1")
+
+
+def test_cleanup_rules(tmp_path, monkeypatch):
+    from cs import config, db, pipeline
+    monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
+    now = db.now()
+
+    def source(status, age_days):
+        sid = db.insert("sources", {"status": status, "created_at": now - age_days * 86400, "updated_at": now})
+        wd = pipeline.work_dir(sid)
+        wd.mkdir(parents=True)
+        (wd / "source.mkv").write_bytes(b"x")
+        (wd / "transcript.json").write_text("{}")
+        return sid
+
+    decided = source("review", 1)
+    db.insert("clips", {"source_id": decided, "start": 0, "end": 1, "status": "rejected", "created_at": now, "updated_at": now})
+    open_ = source("review", 1)
+    db.insert("clips", {"source_id": open_, "start": 0, "end": 1, "status": "review", "created_at": now, "updated_at": now})
+    old = source("review", 8)
+    oc = db.insert("clips", {"source_id": old, "start": 0, "end": 1, "status": "review", "created_at": now, "updated_at": now})
+    pipeline.cleanup()
+    assert not (pipeline.work_dir(decided) / "source.mkv").exists()
+    assert (pipeline.work_dir(decided) / "transcript.json").exists()
+    assert db.one("SELECT status, files_deleted FROM sources WHERE id=?", (decided,)) == {"status": "done", "files_deleted": 1}
+    assert (pipeline.work_dir(open_) / "source.mkv").exists()
+    assert db.one("SELECT status FROM clips WHERE id=?", (oc,))["status"] == "expired"
