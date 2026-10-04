@@ -21,6 +21,7 @@ def state(tmp_path, monkeypatch):
         return 0
     monkeypatch.setattr(push, "send", no_push)
     db.reset_for_tests()
+    db.kv_set("settings", {"schedule_on": False})  # these tests post right away; the schedule has its own tests
     yield tmp_path
     db.reset_for_tests()
 

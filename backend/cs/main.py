@@ -12,6 +12,7 @@ import time
 from collections import OrderedDict, defaultdict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -372,7 +373,9 @@ def clip_out(c: dict, src: dict | None = None) -> dict:
                    "platform": src.get("platform", ""), "permission": src.get("permission", ""),
                    "files_deleted": bool(src.get("files_deleted"))},
         "captions": {p: post_caption(c, src, p) for p in PLATFORM_TAGS} if src else {},
-        "posts": {r["platform"]: {"status": r["status"], "url": r["url"], "error": r["error"]}
+        "posts": {r["platform"]: {"status": r["status"], "url": r["url"], "error": r["error"],
+                                  "at": r["not_before"] if r["status"] == "queued" else r["posted_at"],
+                                  "stats": db.jload(r["stats"], {})}
                   for r in db.all("SELECT * FROM posts WHERE clip_id=?", (c["id"],))},
     }
 
@@ -472,6 +475,63 @@ async def posted(cid: int, body: PostedIn, s: Session = Depends(current)):
     return {"clip": clip_out(get_clip(cid))}
 
 
+class ViewsIn(BaseModel):
+    platform: str = Field(pattern="^(tiktok|youtube|instagram)$")
+    views: int = Field(ge=0, le=10_000_000_000)
+
+
+@app.put("/api/clips/{cid}/views")
+async def set_views(cid: int, body: ViewsIn, s: Session = Depends(current)):
+    """Views typed in by the owner (TikTok / YouTube numbers aren't read automatically)."""
+    c = get_clip(cid)
+    v = db.jload(c["views"], {}) or {}
+    v[body.platform] = body.views
+    db.update("clips", cid, {"views": db.jdump(v), "updated_at": db.now()})
+    return {"clip": clip_out(get_clip(cid))}
+
+
+@app.get("/api/stats")
+async def stats(days: int = 30, s: Session = Depends(current)):
+    days = max(1, min(365, days))
+    since = time.time() - days * 86400
+    rows = db.all("SELECT p.platform, p.status, p.posted_at, p.url, p.stats, c.id clip_id, c.hook, c.views manual, "
+                  "c.score, src.creator, src.title src_title FROM posts p JOIN clips c ON c.id=p.clip_id "
+                  "LEFT JOIN sources src ON src.id=c.source_id WHERE p.status='done' AND p.posted_at>=? "
+                  "ORDER BY p.posted_at DESC", (since,))
+    clips: dict[int, dict] = {}
+    creators: dict[str, dict] = {}
+    days_count: dict[str, int] = {}
+    for r in rows:
+        st = db.jload(r["stats"], {}) or {}
+        manual = (db.jload(r["manual"], {}) or {}).get(r["platform"])
+        views = int(st.get("views") or st.get("reach") or manual or 0)
+        c = clips.setdefault(r["clip_id"], {"clip_id": r["clip_id"], "hook": r["hook"], "creator": r["creator"] or "",
+                                            "score": r["score"], "posted_at": r["posted_at"], "views": 0,
+                                            "platforms": {}})
+        c["platforms"][r["platform"]] = {"views": views, "likes": st.get("likes"), "comments": st.get("comments"),
+                                         "shares": st.get("shares"), "url": r["url"], "manual": manual is not None,
+                                         "basic": bool(st.get("basic"))}
+        c["views"] += views
+        c["posted_at"] = min(c["posted_at"], r["posted_at"])
+        cr = creators.setdefault(r["creator"] or "?", {"creator": r["creator"] or "?", "posts": 0, "views": 0})
+        cr["posts"] += 1
+        cr["views"] += views
+        day = datetime.fromtimestamp(r["posted_at"], config.TZ).strftime("%Y-%m-%d")
+        days_count[day] = days_count.get(day, 0) + 1
+    queued = db.one("SELECT COUNT(DISTINCT clip_id) n, MAX(not_before) last FROM posts WHERE status='queued'")
+    totals = {p: {"posts": 0, "views": 0} for p in publish.PLATFORMS}
+    for c in clips.values():
+        for p, v in c["platforms"].items():
+            totals[p]["posts"] += 1
+            totals[p]["views"] += v["views"]
+    return {"days": days, "totals": totals, "views": sum(c["views"] for c in clips.values()),
+            "clips": sorted(clips.values(), key=lambda c: -c["views"]),
+            "creators": sorted(creators.values(), key=lambda c: -c["views"]), "per_day": days_count,
+            "queue": {"clips": queued["n"] or 0, "until": queued["last"] or 0},
+            "review_waiting": db.one("SELECT COUNT(*) n FROM clips WHERE status='review'")["n"],
+            "ig_insights": not (db.kv_get("ig_insights_error") or "")}
+
+
 class PublishIn(BaseModel):
     platform: str = Field(pattern="^(tiktok|youtube|instagram)$")
 
@@ -485,6 +545,9 @@ async def publish_now(cid: int, body: PublishIn, s: Session = Depends(current)):
     if not publish.connected(body.platform):
         raise HTTPException(400, f"{body.platform.title()} isn't connected yet.")
     row = db.one("SELECT * FROM posts WHERE clip_id=? AND platform=?", (cid, body.platform))
+    if row and row["status"] == "queued" and row["not_before"] > time.time():  # scheduled: post it now instead
+        db.execute("UPDATE posts SET not_before=0, scheduled=0, updated_at=? WHERE id=?", (db.now(), row["id"]))
+        return {"clip": clip_out(get_clip(cid))}
     if row and row["status"] != "failed":
         raise HTTPException(409, "Already posted or on its way." if row["status"] == "done" else "Already on its way.")
     if row:
@@ -815,6 +878,10 @@ class SettingsIn(BaseModel):
     keyword_blocklist: str | None = Field(None, max_length=2000)
     max_source_hours: float | None = Field(None, ge=0.25, le=8)
     auto_max_age_hours: int | None = Field(None, ge=1, le=720)
+    schedule_on: bool | None = None
+    post_times: str | None = Field(None, max_length=200)
+    reminder_time: str | None = Field(None, pattern=r"^([01]?\d|2[0-3]):[0-5]\d$")
+    weekly_summary: bool | None = None
 
 
 @app.get("/api/settings")
@@ -826,6 +893,11 @@ async def get_settings(s: Session = Depends(current)):
 async def put_settings(body: SettingsIn, s: Session = Depends(current)):
     cur = db.kv_get("settings", {}) or {}
     cur.update({k: v for k, v in body.model_dump().items() if v is not None})
+    if body.post_times is not None:
+        times = [t.strip() for t in body.post_times.replace(";", ",").split(",") if t.strip()]
+        if not all(re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", t) for t in times):
+            raise HTTPException(400, "Posting times look like 12:00, 18:00, 21:00.")
+        cur["post_times"] = ", ".join(sorted(set(t.zfill(5) for t in times)))
     if int(cur.get("min_clip_seconds", 15)) >= int(cur.get("max_clip_seconds", 60)):
         raise HTTPException(400, "The shortest clip must be shorter than the longest.")
     try:

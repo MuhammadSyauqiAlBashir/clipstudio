@@ -181,6 +181,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "max_source_hours": config.MAX_SOURCE_HOURS,
     "auto_max_age_hours": 48,
     "autopost": {"instagram": True, "tiktok": True, "youtube": False},
+    # Posting schedule (WIB): approved clips wait in a queue and go out one per slot per platform.
+    "schedule_on": True,
+    "post_times": "12:00, 18:00, 21:00",
+    "reminder_time": "19:00",       # daily push: clips waiting for review + how long the queue lasts
+    "weekly_summary": True,         # Monday 09:00 push with last week's numbers
 }
 
 _lock = threading.RLock()
@@ -206,8 +211,24 @@ def conn() -> sqlite3.Connection:
         c.execute("PRAGMA foreign_keys=ON")
         c.execute("PRAGMA busy_timeout=30000")
         c.executescript(SCHEMA)
+        _migrate(c)
         _conn = c
     return _conn
+
+
+# Columns added after the first deploy (CREATE TABLE IF NOT EXISTS doesn't add them to an existing DB).
+ADDED_COLUMNS = {
+    "posts": {"stats": "TEXT NOT NULL DEFAULT '{}'", "stats_at": "REAL NOT NULL DEFAULT 0",
+              "scheduled": "INTEGER NOT NULL DEFAULT 0"},
+}
+
+
+def _migrate(c: sqlite3.Connection):
+    for table, cols in ADDED_COLUMNS.items():
+        have = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+        for name, decl in cols.items():
+            if name not in have:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
 def reset_for_tests():
