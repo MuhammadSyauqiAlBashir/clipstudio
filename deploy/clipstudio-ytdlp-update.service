@@ -1,0 +1,9 @@
+[Unit]
+Description=Update yt-dlp for Clip Studio (YouTube changes often)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+ExecStart=/opt/clipstudio/venv/bin/pip install --quiet --disable-pip-version-check --upgrade "yt-dlp[default]"

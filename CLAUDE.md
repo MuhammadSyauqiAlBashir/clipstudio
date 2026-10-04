@@ -5,8 +5,9 @@ links, uploaded campaign files + automatically watched **YouTube, Twitch and Kic
 and live streams**) → the best moments as 9:16 clips with captions → the owner reviews and approves → posts (manually
 at first). Planned at `https://clips.bashir.my.id`.
 
-**Status (2026-10-04): docs only, nothing built. Interview done (answers in `docs/DESIGN.md` §11).** Next: Phase 1
-(DESIGN §10).
+**Status (2026-10-04): Phases 1–3 built and LIVE at https://clips.bashir.my.id** (paste link / upload → clips →
+review → 1080×1920 final → manual posting; YouTube/Twitch/Kick watchers; music check). Phase 4 (publishing APIs) not
+built. As-built differences from the plan: `docs/DESIGN.md` §13. Code map + deploy: `README.md`.
 
 Read first:
 - `docs/DESIGN.md`: the adapted plan (architecture, data model, pipeline, watchers, server budget, free services, phases, open questions).
@@ -73,28 +74,32 @@ the .jsonl).
 - The Google Cloud project `clipstudio-ai` (Gemini + YouTube Data API keys) is on the owner's **finance Google
   account**, not bashirsyauqi@gmail.com.
 
-## Planned server facts (not created yet)
+## Server facts (built 2026-10-04)
 
-| Item | Plan |
+| Item | Value |
 |---|---|
-| Web/API | `clipstudio.service`, user `clipstudio`, 127.0.0.1:**8400** (free port; others use 8000/8090/8100/8200/8210/8300) |
-| Worker | `clipstudio-worker.service` (same user; limits above) |
-| Data | PocketBase `clip_*`, machine login `svc_clipstudio`, role `clips`; add `clip_*` to the `pb.bashir.my.id` 404 list |
-| Files | `/var/lib/clipstudio/{work,clips,models}` (StateDirectory) |
-| Secrets | `/etc/clipstudio/env` (`root:root 600` until the app user exists): `GEMINI_API_KEY`, `GROQ_API_KEY`, `YT_API_KEY` (all present and tested 2026-10-04; YouTube key restricted to YouTube Data API v3 + IP 103.103.21.9). Later: PB login, `CS_WEBSUB_SECRET`, `TWITCH_CLIENT_ID`/`TWITCH_CLIENT_SECRET`, `KICK_CLIENT_ID`/`KICK_CLIENT_SECRET`, VAPID keys |
-| Site | `clips.bashir.my.id` (DNS wildcard already points here); Caddy block `deploy/Caddyfile.clipstudio`; public (no login) callbacks: `/api/websub/callback`, `/api/twitch/callback`, `/api/kick/callback` (each verifies its signature) |
-| Tools to install | ffmpeg (apt), yt-dlp (pip, keep it updated), streamlink, deno (for YouTube nsig), mediapipe (Python ≤ 3.12 wheels; the server's Python is 3.12.3). None installed yet |
+| Web/API | `clipstudio.service`, user `clipstudio`, 127.0.0.1:**8400**, code `/opt/clipstudio/cs`, venv `/opt/clipstudio/venv` |
+| Worker | `clipstudio-worker.service` (same user): `Nice=10`, `CPUQuota=100%`, `MemoryMax=900M`, idle I/O; no `MemoryDenyWriteExecute` (deno JIT) |
+| yt-dlp | updated daily by `clipstudio-ytdlp-update.timer` (05:20); deno 2.9.7 in `/usr/local/bin` (checksum verified); ffmpeg 6.1 (apt) |
+| Data | **Own SQLite** `/var/lib/clipstudio/clipstudio.db` (tables channels, sources, jobs, clips, events, usage, kv, push_subs, seen, inbox); work `/var/lib/clipstudio/work/s<id>/`, finals `/var/lib/clipstudio/clips/`, VAPID key `/var/lib/clipstudio/vapid_private.pem`. **No PocketBase collections**; login reads the shared `users` only |
+| Secrets | `/etc/clipstudio/env` (`root:clipstudio 640`): `GEMINI_API_KEY`, `GROQ_API_KEY`, `YT_API_KEY` (restricted to YouTube Data API v3 + IP 103.103.21.9); later `TWITCH_CLIENT_ID/SECRET`, `KICK_CLIENT_ID/SECRET`. Optional cookies `/etc/clipstudio/youtube-cookies.txt` (deploy sets `root:clipstudio 640`). `CS_WEBSUB_SECRET` unset → random one in the DB `kv` |
+| Site | `clips.bashir.my.id` block appended to `/etc/caddy/Caddyfile` (backup `~/work/Caddyfile.bak-20261004-141255`); source `deploy/Caddyfile.clipstudio`; uploads up to 8 GB; public signed callbacks `/api/websub/callback`, `/api/twitch/callback` |
+| Static | `/srv/clipstudio` |
+| Dev | `.venv` in the repo; `~/work/clipstudio-dev/dev.sh <script.py>` runs with the real keys against `~/work/clipstudio-dev/state`, capped like the worker. (Don't use `~/work/cs-dev`: it belongs to another project.) |
+| Checks | `systemctl is-active clipstudio clipstudio-worker`; `journalctl -u clipstudio-worker -f`; More tab in the app shows worker, queue, quotas, disk, keys, activity |
 
 ## Open owner tasks (remind at session start)
 
-- [ ] Check whether the Biznet plan has a monthly data-transfer limit (each hour of 1080p source downloads ~1.5–3 GB).
-- [ ] List the first sources: YouTube/Twitch/Kick channels that allow clipping, and/or clipping campaigns (Whop
-      Content Rewards, etc.).
-- [ ] Before posting: create new TikTok, YouTube and Instagram accounts just for clips.
-- [ ] Before Phase 2: free Twitch developer app (dev.twitch.tv, Twitch account with 2FA) and Kick developer app;
-      Claude guides click by click and gives hidden-input commands for the keys.
-- [ ] Only if YouTube blocks downloads: one throwaway YouTube account for cookies.
-- Done 2026-10-04: interview; Groq account + key; YouTube Data API v3 enabled + restricted key (both tested).
+Full click-by-click guide: `~/work/clipstudio-owner-setup.md`.
+- [ ] iPhone: open https://clips.bashir.my.id in Safari → Share → Add to Home Screen → open it → More → Turn on
+      notifications. Try the review flow on the test clips (source added by Claude: a CC-BY interview).
+- [ ] Clip brand name + new Google account (clips) + YouTube channel, TikTok, Instagram (Creator) — before posting.
+- [ ] Twitch account + 2FA + developer app → `TWITCH_CLIENT_ID/SECRET` (hidden-input command), then
+      `sudo systemctl restart clipstudio clipstudio-worker`.
+- [ ] Kick account + 2FA + developer app → `KICK_CLIENT_ID/SECRET` (same). Kick webhooks stay OFF (the app polls).
+- [ ] Throwaway YouTube account → cookies file → `/etc/clipstudio/youtube-cookies.txt` (only used when YouTube blocks).
+- [ ] Channel/campaign list (with proof of permission) → add in the Channels tab.
+- Done 2026-10-04: interview; Groq + YouTube keys (tested); Biznet traffic is unlimited.
 
 ## History
 
@@ -106,3 +111,6 @@ the .jsonl).
 - 2026-10-04 — First session in `~/clipstudio`: handoff checked (feedback `~/work/handoff-feedback-clipstudio-2026-10-04.md`,
   reply `~/work/handoff-reply-clipstudio-2026-10-04.md`); Groq + YouTube keys installed and tested; interview done;
   DESIGN updated (Twitch/Kick, preview-then-final render, music check in Phase 1, live concurrency, cookies rule).
+- 2026-10-04 — Built and deployed Phases 1–3 (own SQLite, YuNet faces, yt-dlp only, Kick poll). Installed ffmpeg +
+  deno. End-to-end tested on a CC-BY 30-min interview (dev and production sandbox): ~6 min per 30 min of video, final
+  37 s clip ~70 s, worker peak ~690 MB; other apps unaffected. 20 tests pass. Owner's preview-then-final idea built.

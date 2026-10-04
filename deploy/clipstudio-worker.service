@@ -1,0 +1,61 @@
+[Unit]
+Description=Clip Studio worker (download, transcribe, score, render; channel watchers)
+After=network-online.target clipstudio.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=clipstudio
+Group=clipstudio
+WorkingDirectory=/opt/clipstudio
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PATH=/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/etc/clipstudio/env
+ExecStart=/opt/clipstudio/venv/bin/python -m cs.worker
+Restart=always
+RestartSec=10
+TimeoutStopSec=60
+KillSignal=SIGTERM
+UMask=0077
+StateDirectory=clipstudio
+StateDirectoryMode=0700
+
+# Never hurt the live apps (finance holds real money): 1 of 2 cores, low priority, idle I/O.
+Nice=10
+CPUQuota=100%
+CPUWeight=20
+IOSchedulingClass=idle
+IOWeight=10
+MemoryHigh=750M
+MemoryMax=900M
+MemorySwapMax=300M
+TasksMax=128
+
+# Sandbox. No MemoryDenyWriteExecute: deno (YouTube's JS challenge) needs a JIT.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RemoveIPC=true
+
+[Install]
+WantedBy=multi-user.target
