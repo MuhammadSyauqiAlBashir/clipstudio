@@ -125,3 +125,8 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
 - 2026-10-04 — Auto-posting: privacy/terms pages, Instagram Reels auto-post (tested up to a FINISHED container with a
   test pattern; not published), posts table + signed links, Auto-posting card in More, per-clip post status/retry.
   Test data deleted at the owner's request. Twitch/Kick postponed by the owner.
+- 2026-10-04 — TikTok: sandbox app (Login Kit + Content Posting API, video.upload), connect flow + inbox drafts tested
+  (test draft delivered); production draft saved with a placeholder demo video — replace it with the real demo, then
+  Submit. Browse page (YouTube channel uploads, 24 per page, ~3 units/page, name search 100 units). Permission
+  "implied" added. Caption language made explicit. CSP img-src allows i.ytimg.com + yt3.ggpht.com (Caddyfile backup
+  `~/work/Caddyfile.bak-20261004-215602`). First real source: Raditya Dika podcast (implied), 8 clips in review.
