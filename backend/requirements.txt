@@ -1,0 +1,7 @@
+fastapi==0.141.1
+uvicorn==0.54.0
+httpx==0.28.1
+pywebpush==2.5.0
+opencv-python-headless
+numpy
+yt-dlp[default]

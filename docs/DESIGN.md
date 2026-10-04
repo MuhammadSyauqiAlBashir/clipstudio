@@ -5,7 +5,8 @@ channels: **new uploads/VODs and live streams**) into vertical 9:16 clips with c
 review, and (later) publishes approved clips.
 Owner's original spec: [`SPEC-original.md`](SPEC-original.md). Evidence behind every choice: [`RESEARCH.md`](RESEARCH.md).
 
-**Status: not built. Interview done 2026-10-04 (answers in §11). Next step = Phase 1.**
+**Status: Phases 1–3 built and deployed 2026-10-04 (https://clips.bashir.my.id). Phase 4 (publishing APIs) not
+built. What the build changed from this plan: §13.**
 
 ## 0. Why the plan differs from the original spec
 
@@ -61,7 +62,7 @@ Units: `clipstudio.service` (web/API, user `clipstudio`, 127.0.0.1:**8400**) and
 (pipeline; `Nice=10`, `CPUQuota=100%` (= 1 of 2 cores), `MemoryMax=900M`, `IOSchedulingClass=idle`). The recorder runs
 inside the worker as a separate process with its own limits (mostly network + disk, little CPU).
 
-## 3. Data model (PocketBase, prefix `clip_`, machine login `svc_clipstudio` role `clips`)
+## 3. Data model (as planned; **built as Clip Studio's own SQLite DB**, tables without the `clip_` prefix — see §13)
 
 | Collection | Key fields |
 |---|---|
@@ -228,3 +229,17 @@ for Phase 2); the clip accounts on TikTok/YouTube/Instagram (needed before posti
 - Free-tier changes (Groq/Gemini/Twitch/Kick limits).
 - Income uncertainty: average clipper earnings are low; consistency matters more than tooling.
 - Resource contention with live apps → enforced by systemd limits; 1080p sources use more disk and bandwidth.
+
+## 13. As built (2026-10-04) — differences from the plan above
+
+| Plan | Built | Why |
+|---|---|---|
+| PocketBase `clip_*` collections + machine login | **Own SQLite** `/var/lib/clipstudio/clipstudio.db` (WAL), shared by web + worker; login still via the shared `users` but **read-only** (password check/refresh), allowlist `bashirsyauqi`, `bells` | Owner: "use a separate database if you want; don't touch other data". Nothing in PocketBase changes; the worker's frequent writes stay out of the shared DB. Not in the nightly PocketBase backup (clips/transcripts can be remade) |
+| MediaPipe faces | **OpenCV YuNet** (`FaceDetectorYN`, MIT, 230 KB model in `backend/cs/assets/`) | Same job, far lighter install (no jax/matplotlib) |
+| streamlink for live | **yt-dlp only** (`--live-from-start` on YouTube, MPEG-TS, SIGINT at 4 h) | One tool to keep updated |
+| Kick webhook | **Kick API poll every 3 min**, live only (the API has no VOD list; a missed Kick live has no replay) | Fewer moving parts; webhook can be added later |
+| Candidates table | Candidates and clips are one `clips` table (`status` candidate/excluded/review/approved/rendering/ready/rejected/expired/posted) | Simpler; excluded moments stay visible with the reason |
+| Edits re-render the preview | Edits go into the **final** only (preview keeps the old text; editing a ready clip re-queues its final) | Saves CPU |
+
+Measured on the server (30-min CC-BY interview): whole pipeline ≈ 6 min (Groq ~1 min, Gemini incl. 503 fallbacks ~2
+min, 5 previews ~20 s each); final 1080×1920 of a 37 s clip ≈ 70 s on one core (6.5 MB); worker peak RAM ≈ 690 MB.

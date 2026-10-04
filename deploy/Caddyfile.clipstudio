@@ -1,0 +1,39 @@
+# Clip Studio: static app + /api -> 127.0.0.1:8400. Callbacks for YouTube/Twitch are public (signed, rate-limited).
+clips.bashir.my.id {
+	import security
+	encode zstd gzip
+
+	header {
+		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+		Permissions-Policy "camera=(), microphone=(), accelerometer=(), gyroscope=(), magnetometer=(), geolocation=(), payment=(), usb=()"
+		Cross-Origin-Resource-Policy "same-origin"
+		X-Robots-Tag "noindex, nofollow"
+	}
+
+	# Campaign file uploads (streamed to disk by the app, which also checks free space)
+	handle /api/uploads {
+		request_body {
+			max_size 8GB
+		}
+		reverse_proxy 127.0.0.1:8400 {
+			transport http {
+				read_timeout 2h
+				write_timeout 2h
+			}
+		}
+	}
+	handle /api/* {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:8400
+	}
+	handle {
+		root * /srv/clipstudio
+		@static path /icons/*
+		@other not path /icons/*
+		header @static Cache-Control "public, max-age=604800"
+		header @other Cache-Control "no-cache"
+		file_server
+	}
+}
