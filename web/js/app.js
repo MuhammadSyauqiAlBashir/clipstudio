@@ -41,10 +41,12 @@ async function render() {
   if (!me) return loginPage()
   const [path, query] = (location.hash.slice(1) || "review").split("?")
   const [page, arg] = path.split("/")
-  const back = new URLSearchParams(query || "").get("tiktok")
-  if (back) {
-    history.replaceState(null, "", "#more")
-    setTimeout(() => toast(back === "connected" ? "TikTok connected ✅" : `TikTok: ${back}`, back === "connected" ? "" : "bad"), 300)
+  for (const [key, label] of [["tiktok", "TikTok"], ["youtube", "YouTube"]]) {
+    const back = new URLSearchParams(query || "").get(key)
+    if (back) {
+      history.replaceState(null, "", "#more")
+      setTimeout(() => toast(back === "connected" ? `${label} connected ✅` : `${label}: ${back}`, back === "connected" ? "" : "bad"), 300)
+    }
   }
   const active = { source: "sources", clip: "ready", channels: "more", browse: "sources" }[page] || page
   let counts = {}
@@ -677,10 +679,11 @@ async function morePage(view) {
       const t = el("input", { type: "checkbox", checked: a.autopost, disabled: !a.connected })
       t.onchange = async () => { try { await api("/accounts/autopost", { method: "PUT", json: { platform: k, on: t.checked } }); toast(t.checked ? `${names[k]}: auto-post on` : `${names[k]}: auto-post off`) } catch (e) { toast(e.message, "bad") } }
       let action = null
-      if (k === "tiktok" && a.can_connect) {
+      if ((k === "tiktok" || k === "youtube") && a.can_connect) {
+        const label = names[k]
         action = a.connected
-          ? el("button", { class: "btn sm", type: "button", text: "Disconnect", onclick: async (e) => { if (!confirm("Disconnect TikTok?")) return; await busy(e.target, () => api("/tiktok/disconnect", { method: "POST" })).catch(() => {}); render() } })
-          : el("a", { class: "btn sm primary", href: "/api/tiktok/connect", text: "Connect TikTok" })
+          ? el("button", { class: "btn sm", type: "button", text: "Disconnect", onclick: async (e) => { if (!confirm(`Disconnect ${label}?`)) return; await busy(e.target, () => api(`/${k}/disconnect`, { method: "POST" })).catch(() => {}); render() } })
+          : el("a", { class: "btn sm primary", href: `/api/${k}/connect`, text: `Connect ${k === "youtube" ? "YouTube" : "TikTok"}` })
       }
       return el("div", { class: "row wrap", style: { padding: "6px 0", borderTop: "1px solid var(--line)" } },
         el("div", { class: "grow" }, el("b", { text: names[k] }),
