@@ -8,7 +8,7 @@ import logging
 import signal
 import time
 
-from . import config, db, fetch, groq, media, pipeline, twitch, watch, yt
+from . import config, db, fetch, groq, media, pipeline, publish, twitch, watch, yt
 from . import kick as kick_mod
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -149,7 +149,8 @@ async def main():
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
     log.info("worker started")
-    tasks = [asyncio.create_task(heavy_loop()), asyncio.create_task(record_loop()), asyncio.create_task(watch_loop())]
+    tasks = [asyncio.create_task(heavy_loop()), asyncio.create_task(record_loop()), asyncio.create_task(watch_loop()),
+             asyncio.create_task(publish.loop(stop))]
     await stop.wait()
     await asyncio.wait(tasks, timeout=40)  # a recording gets its SIGINT and closes the file
     for t in tasks:

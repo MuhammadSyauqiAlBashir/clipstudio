@@ -20,7 +20,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
-from . import config, db, fetch, gate, kick, pipeline, push, twitch, yt
+from . import config, db, fetch, gate, kick, pipeline, publish, push, twitch, yt
+from .posttext import PLATFORM_TAGS, post_caption
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -326,21 +327,6 @@ async def delete_source(sid: int, s: Session = Depends(current)):
 # ---------------------------------------------------------------------------------------------------------
 # Clips
 # ---------------------------------------------------------------------------------------------------------
-PLATFORM_TAGS = {"tiktok": "", "youtube": " #shorts", "instagram": " #reels"}
-
-
-def post_caption(c: dict, src: dict, platform: str = "tiktok") -> str:
-    st = db.settings()
-    tags = " ".join(dict.fromkeys((c["hashtags"] + " " + st["hashtags"] + PLATFORM_TAGS.get(platform, "")).split()))
-    creator = src.get("creator") or "the original creator"
-    m = re.search(r"youtube\.com/@([\w.\-]+)|(?:twitch\.tv|kick\.com)/(\w+)", src.get("creator_url") or "")
-    if m:
-        creator = f"@{m.group(1) or m.group(2)}"
-    text = st["caption_template"].format(hook=c["hook"], caption=c["caption"], creator=creator,
-                                         source_url=src.get("url") or src.get("creator_url") or "", hashtags=tags)
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
-
-
 def clip_out(c: dict, src: dict | None = None) -> dict:
     src = src or db.one("SELECT * FROM sources WHERE id=?", (c["source_id"],)) or {}
     return {
@@ -356,6 +342,8 @@ def clip_out(c: dict, src: dict | None = None) -> dict:
                    "platform": src.get("platform", ""), "permission": src.get("permission", ""),
                    "files_deleted": bool(src.get("files_deleted"))},
         "captions": {p: post_caption(c, src, p) for p in PLATFORM_TAGS} if src else {},
+        "posts": {r["platform"]: {"status": r["status"], "url": r["url"], "error": r["error"]}
+                  for r in db.all("SELECT * FROM posts WHERE clip_id=?", (c["id"],))},
     }
 
 
@@ -454,6 +442,72 @@ async def posted(cid: int, body: PostedIn, s: Session = Depends(current)):
     return {"clip": clip_out(get_clip(cid))}
 
 
+class PublishIn(BaseModel):
+    platform: str = Field(pattern="^(tiktok|youtube|instagram)$")
+
+
+@app.post("/api/clips/{cid}/publish")
+async def publish_now(cid: int, body: PublishIn, s: Session = Depends(current)):
+    """Post (or retry) an approved, finished clip on one platform."""
+    c = get_clip(cid)
+    if c["status"] not in ("ready", "posted") or not c["final"]:
+        raise HTTPException(400, "Only approved clips with a finished video can be posted.")
+    if not publish.connected(body.platform):
+        raise HTTPException(400, f"{body.platform.title()} isn't connected yet.")
+    row = db.one("SELECT * FROM posts WHERE clip_id=? AND platform=?", (cid, body.platform))
+    if row and row["status"] != "failed":
+        raise HTTPException(409, "Already posted or on its way." if row["status"] == "done" else "Already on its way.")
+    if row:
+        db.execute("UPDATE posts SET status='queued', error='', attempts=0, not_before=0, remote_id='', updated_at=? "
+                   "WHERE id=?", (db.now(), row["id"]))
+    else:
+        db.execute("INSERT INTO posts(clip_id, platform, status, created_at, updated_at) VALUES(?,?,?,?,?)",
+                   (cid, body.platform, "queued", db.now(), db.now()))
+    return {"clip": clip_out(get_clip(cid))}
+
+
+@app.get("/api/accounts")
+async def accounts(s: Session = Depends(current)):
+    auto = db.settings().get("autopost") or {}
+    ig = {"connected": publish.connected("instagram"), "username": "", "error": ""}
+    if ig["connected"]:
+        cached = db.kv_get("ig_me", {}) or {}
+        if cached.get("at", 0) > time.time() - 3600:
+            ig["username"] = cached.get("username", "")
+        else:
+            try:
+                me_ = await publish.ig_me()
+                ig["username"] = me_.get("username", "")
+                db.kv_set("ig_me", {"username": ig["username"], "at": time.time()})
+            except (publish.PublishError, httpx.HTTPError) as e:
+                ig["error"] = str(e)[:200]
+    tok = db.kv_get("ig_token", {}) or {}
+    ig["expires"] = tok.get("expires", 0)
+    out = {"instagram": ig,
+           "tiktok": {"connected": publish.connected("tiktok"), "username": "", "error": "",
+                      "note": "Drafts in your TikTok inbox after TikTok approves the app."},
+           "youtube": {"connected": publish.connected("youtube"), "username": "", "error": "",
+                       "note": "Waiting for Google's audit; until then share from the phone."}}
+    for k, v in out.items():
+        v["autopost"] = bool(auto.get(k))
+    return {"accounts": out}
+
+
+class AutopostIn(BaseModel):
+    platform: str = Field(pattern="^(tiktok|youtube|instagram)$")
+    on: bool
+
+
+@app.put("/api/accounts/autopost")
+async def set_autopost(body: AutopostIn, s: Session = Depends(current)):
+    cur = db.kv_get("settings", {}) or {}
+    auto = {**db.DEFAULT_SETTINGS["autopost"], **(cur.get("autopost") or {})}
+    auto[body.platform] = body.on
+    cur["autopost"] = auto
+    db.kv_set("settings", cur)
+    return {"autopost": auto}
+
+
 def media_file(path: str) -> Path:
     if not path:
         raise HTTPException(404, "Not available.")
@@ -473,6 +527,15 @@ async def preview(cid: int, s: Session = Depends(current)):
 async def thumb(cid: int, s: Session = Depends(current)):
     return FileResponse(media_file(get_clip(cid)["thumb"]), media_type="image/jpeg",
                         headers={"Cache-Control": "private, max-age=86400"})
+
+
+@app.get("/api/pub/{cid}/{exp}/{sig}.mp4")
+async def public_final(cid: int, exp: int, sig: str):
+    """Temporary signed link for a platform to fetch an approved final (no login; see publish.signed_url)."""
+    if not publish.valid_link(cid, exp, sig):
+        raise HTTPException(404, "Not found.")
+    return FileResponse(media_file(get_clip(cid)["final"]), media_type="video/mp4",
+                        headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
 
 
 @app.get("/api/clips/{cid}/final.mp4")

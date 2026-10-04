@@ -6,8 +6,9 @@ and live streams**) → the best moments as 9:16 clips with captions → the own
 at first). Planned at `https://clips.bashir.my.id`.
 
 **Status (2026-10-04): Phases 1–3 built and LIVE at https://clips.bashir.my.id** (paste link / upload → clips →
-review → 1080×1920 final → manual posting; YouTube/Twitch/Kick watchers; music check). Phase 4 (publishing APIs) not
-built. As-built differences from the plan: `docs/DESIGN.md` §13. Code map + deploy: `README.md`.
+review → 1080×1920 final → manual posting; YouTube/Twitch/Kick watchers; music check). Phase 4 started:
+**Instagram auto-posting is live** (approve → final → Reel on @bashclipeveryday); TikTok inbox drafts and YouTube
+wait for the owner's developer apps / reviews (guide `~/work/clipstudio-autopost-setup.md`). As-built differences from the plan: `docs/DESIGN.md` §13. Code map + deploy: `README.md`.
 
 Read first:
 - `docs/DESIGN.md`: the adapted plan (architecture, data model, pipeline, watchers, server budget, free services, phases, open questions).
@@ -86,20 +87,24 @@ the .jsonl).
 | Site | `clips.bashir.my.id` block appended to `/etc/caddy/Caddyfile` (backup `~/work/Caddyfile.bak-20261004-141255`); source `deploy/Caddyfile.clipstudio`; uploads up to 8 GB; public signed callbacks `/api/websub/callback`, `/api/twitch/callback` |
 | Static | `/srv/clipstudio` |
 | Dev | `.venv` in the repo; `~/work/clipstudio-dev/dev.sh <script.py>` runs with the real keys against `~/work/clipstudio-dev/state`, capped like the worker. (Don't use `~/work/cs-dev`: it belongs to another project.) |
+| Auto-posting | `backend/cs/publish.py`: table `posts` (one row per clip+platform, idempotent), worker loop posts one at a time, ≥90 s apart per platform. Instagram: Meta app `bashclipeveryday` (dev mode, @bashclipeveryday as Instagram Tester, Instagram Login), `IG_ACCESS_TOKEN` seed in env, refreshed daily into DB `kv.ig_token` (60 days); Instagram fetches the final from a signed link `/api/pub/<clip>/<exp>/<sig>.mp4` (1 h, only while a post is pending; resumable upload needs Facebook Login). Settings `autopost` per platform (YouTube off by default) |
+| Policy pages | `https://clips.bashir.my.id/privacy.html`, `/terms.html` (contact bashclip.everyday@gmail.com), icon `/icons/icon-1024.png` |
 | Checks | `systemctl is-active clipstudio clipstudio-worker`; `journalctl -u clipstudio-worker -f`; More tab in the app shows worker, queue, quotas, disk, keys, activity |
 
 ## Open owner tasks (remind at session start)
 
-Full click-by-click guide: `~/work/clipstudio-owner-setup.md`.
-- [ ] iPhone: open https://clips.bashir.my.id in Safari → Share → Add to Home Screen → open it → More → Turn on
-      notifications. Try the review flow on the test clips (source added by Claude: a CC-BY interview).
-- [ ] Clip brand name + new Google account (clips) + YouTube channel, TikTok, Instagram (Creator) — before posting.
-- [ ] (Postponed by owner 2026-10-04: no 2FA yet) Twitch account + 2FA + developer app → `TWITCH_CLIENT_ID/SECRET` (hidden-input command), then
-      `sudo systemctl restart clipstudio clipstudio-worker`.
-- [ ] (Postponed by owner 2026-10-04) Kick account + 2FA + developer app → `KICK_CLIENT_ID/SECRET` (same). Kick webhooks stay OFF (the app polls).
-- [ ] Channel/campaign list (with proof of permission) → add in the Channels tab.
-- Done 2026-10-04: interview; Groq + YouTube keys (tested); Biznet traffic is unlimited; throwaway YouTube cookies
-  installed (`root:clipstudio 640`, login cookies present); owner tested the review flow; test data deleted.
+Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopost-setup.md` (auto-posting).
+- [ ] iPhone: open the site from the **Home Screen icon** → More → Turn on notifications (no device registered yet).
+- [ ] TikTok (Part B): DNS TXT for `bashir.my.id` added 2026-10-04 and visible → click **Verify**; Login Kit +
+      Content Posting API (Direct Post off); sandbox + target user; save `TIKTOK_CLIENT_KEY/SECRET`. Then Claude builds
+      the inbox upload, records the demo, writes the review text → owner submits.
+- [ ] YouTube (Part C): OAuth consent (External, published), scope youtube.upload, Web client → `YT_OAUTH_CLIENT_ID/SECRET`.
+      Then Claude builds Connect YouTube + gives the audit form text → owner submits.
+- [ ] First real source with permission → approve one clip = first automatic Instagram Reel (public!).
+- [ ] (Postponed) Twitch and Kick developer apps.
+- [ ] Channel/campaign list → Channels tab.
+- Done 2026-10-04: interview; Groq + YouTube keys; Biznet traffic unlimited; throwaway cookies; review flow tested;
+  test data deleted; brand **bashclipeveryday** (clip Gmail bashclip.everyday@gmail.com); Instagram Meta app + token.
 
 ## History
 
@@ -114,3 +119,6 @@ Full click-by-click guide: `~/work/clipstudio-owner-setup.md`.
 - 2026-10-04 — Built and deployed Phases 1–3 (own SQLite, YuNet faces, yt-dlp only, Kick poll). Installed ffmpeg +
   deno. End-to-end tested on a CC-BY 30-min interview (dev and production sandbox): ~6 min per 30 min of video, final
   37 s clip ~70 s, worker peak ~690 MB; other apps unaffected. 20 tests pass. Owner's preview-then-final idea built.
+- 2026-10-04 — Auto-posting: privacy/terms pages, Instagram Reels auto-post (tested up to a FINISHED container with a
+  test pattern; not published), posts table + signed links, Auto-posting card in More, per-clip post status/retry.
+  Test data deleted at the owner's request. Twitch/Kick postponed by the owner.

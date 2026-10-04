@@ -144,6 +144,21 @@ CREATE TABLE IF NOT EXISTS inbox (     -- webhook deliveries handed from the web
   payload TEXT NOT NULL,
   at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS posts (     -- one row per clip and platform: a retry never posts twice
+  id INTEGER PRIMARY KEY,
+  clip_id INTEGER NOT NULL,
+  platform TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued', -- queued / uploading / processing / done / failed
+  remote_id TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  not_before REAL NOT NULL DEFAULT 0,
+  posted_at REAL NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL,
+  UNIQUE(clip_id, platform)
+);
 CREATE TABLE IF NOT EXISTS seen (
   platform TEXT NOT NULL,
   video_id TEXT NOT NULL,
@@ -165,6 +180,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
                          "sinetron, ftv",
     "max_source_hours": config.MAX_SOURCE_HOURS,
     "auto_max_age_hours": 48,
+    "autopost": {"instagram": True, "tiktok": True, "youtube": False},
 }
 
 _lock = threading.RLock()

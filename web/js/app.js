@@ -199,7 +199,7 @@ async function readyPage(view) {
   if (!clips.length) { view.append(el("div", { class: "empty" }, el("b", { text: "📭" }), "Nothing here yet.")); return }
   let rendering = false
   for (const c of clips) {
-    if (c.status === "approved" || c.status === "rendering") rendering = true
+    if (c.status === "approved" || c.status === "rendering" || Object.values(c.posts || {}).some((v) => ["queued", "uploading", "processing"].includes(v.status))) rendering = true
     const st = { approved: ["⏳ Waiting for the final render", "warn"], rendering: ["⚙️ Making 1080×1920…", "warn"], ready: ["✅ Ready", "good"],
       posted: ["📤 Posted", "good"], rejected: ["✕ Rejected", "bad"], expired: ["⌛ Expired", ""] }[c.status] || [c.status, ""]
     const card = el("div", { class: "card clip" },
@@ -209,6 +209,7 @@ async function readyPage(view) {
         c.reject_reason ? el("div", { class: "small muted", text: `Reason: ${c.reject_reason}` }) : null,
         c.note ? el("div", { class: "small", style: { color: "var(--bad)" }, text: c.note }) : null,
         Object.keys(c.posted || {}).length ? el("div", { class: "small muted", text: `Posted on: ${Object.keys(c.posted).join(", ")}` }) : null,
+        Object.entries(c.posts || {}).filter(([, v]) => v.status !== "done").map(([k, v]) => el("div", { class: "small", style: { color: v.status === "failed" ? "var(--bad)" : "var(--muted)" }, text: `${k}: ${v.status === "failed" ? "failed — open to retry" : "posting…"}` })),
         el("div", { class: "small muted ellipsis", text: `${c.source.creator} · ${c.source.title}` }))),
       el("div", { style: { padding: "0 12px 12px" } },
         el("button", { class: "btn primary", style: { width: "100%" }, type: "button", text: c.status === "ready" || c.status === "posted" ? "Open · download · copy caption" : "Open", onclick: () => openClip(c.id) })))
@@ -233,8 +234,8 @@ async function shareOrDownload(c, btn) {
 }
 
 async function openClip(id) {
-  let c
-  try { c = (await api(`/clips/${id}`)).clip } catch (e) { toast(e.message, "bad"); return }
+  let c, accounts
+  try { c = (await api(`/clips/${id}`)).clip; accounts = (await api("/accounts")).accounts } catch (e) { toast(e.message, "bad"); return }
   const { body, close } = sheet(c.hook || "Clip", { onClose: render })
   const src = c.has_final ? `/api/clips/${c.id}/final.mp4` : c.has_preview ? `/api/clips/${c.id}/preview.mp4` : null
   body.append(src ? el("video", { class: "big-video", src, controls: true, playsinline: true }) : null)
@@ -255,8 +256,16 @@ async function openClip(id) {
       if (link === null) return
       try { c = (await api(`/clips/${c.id}/posted`, { method: "POST", json: { platform: p, url: link } })).clip; mark.textContent = "✓ Posted"; toast("Saved") } catch (e) { toast(e.message, "bad") }
     }
+    const post = (c.posts || {})[p]
+    const st = post ? { queued: "⏳ Waiting to post", uploading: "⬆️ Uploading…", processing: "⚙️ Processing on the platform…",
+      done: "✅ Posted automatically", failed: `⚠️ Failed: ${post.error}` }[post.status] : ""
+    const pub = el("button", { class: "btn sm primary", type: "button", text: post && post.status === "failed" ? "Retry" : "Post now" })
+    pub.onclick = () => busy(pub, async () => { c = (await api(`/clips/${c.id}/publish`, { method: "POST", json: { platform: p } })).clip; pub.remove(); toast("Posting…") }).catch(() => {})
+    const canPost = c.has_final && (!post || post.status === "failed") && !(c.posted || {})[p] && accounts && accounts[p] && accounts[p].connected
     body.append(el("div", { class: "card", style: { marginTop: "10px" } },
-      el("div", { class: "row" }, el("b", { class: "grow", text: label }), copy, c.has_final ? mark : null),
+      el("div", { class: "row" }, el("b", { class: "grow", text: label }), canPost ? pub : null, copy, c.has_final && !(post && post.status === "done") ? mark : null),
+      st ? el("div", { class: "small", style: { marginTop: "4px", color: post.status === "failed" ? "var(--bad)" : "inherit" } }, st,
+        post.url ? el("span", {}, " · ", el("a", { href: post.url, target: "_blank", rel: "noopener", text: "open" })) : null) : null,
       el("pre", { class: "caption", text: c.captions[p] })))
   }
   const edit = el("button", { class: "btn", type: "button", text: "✏️ Edit text" })
@@ -435,6 +444,19 @@ async function morePage(view) {
   const keys = Object.entries(st.keys).map(([k, v]) => el("span", { class: `chip ${v ? "good" : ""}`, text: `${v ? "✓" : "–"} ${k}` }))
   view.append(el("h1", { text: "More" }), el("div", { class: "card col" }, pushBtn,
     el("p", { class: "hint", style: { margin: 0 }, text: "On iPhone: open this site in Safari → Share → Add to Home Screen, open it from the Home Screen, then tap the button." })))
+  const { accounts } = await api("/accounts")
+  const names = { instagram: "Instagram Reels", tiktok: "TikTok", youtube: "YouTube Shorts" }
+  view.append(el("h2", { text: "Auto-posting" }), el("div", { class: "card col" },
+    el("p", { class: "hint", style: { margin: 0 }, text: "After you approve a clip and its full-quality video is ready, it's posted to the platforms switched on here." }),
+    Object.entries(accounts).map(([k, a]) => {
+      const t = el("input", { type: "checkbox", checked: a.autopost, disabled: !a.connected })
+      t.onchange = async () => { try { await api("/accounts/autopost", { method: "PUT", json: { platform: k, on: t.checked } }); toast(t.checked ? `${names[k]}: auto-post on` : `${names[k]}: auto-post off`) } catch (e) { toast(e.message, "bad") } }
+      return el("div", { class: "row", style: { padding: "6px 0", borderTop: "1px solid var(--line)" } },
+        el("div", { class: "grow" }, el("b", { text: names[k] }),
+          el("div", { class: "small muted", text: a.connected ? `Connected${a.username ? ` as @${a.username}` : ""}${a.expires ? ` · token renews itself` : ""}` : (a.note || "Not connected") }),
+          a.error ? el("div", { class: "small", style: { color: "var(--bad)" }, text: a.error }) : null),
+        el("label", { class: "switch" }, t))
+    })))
   view.append(el("h2", { text: "Status" }), el("div", { class: "card" },
     el("dl", { class: "kv" },
       el("dt", { text: "Worker" }), el("dd", { text: st.worker_alive ? "🟢 running" : "🔴 not running" }),
