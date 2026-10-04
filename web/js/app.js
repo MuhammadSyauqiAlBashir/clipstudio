@@ -25,7 +25,7 @@ setAuthHandler(() => { me = null; render() })
 // ---------------------------------------------------------------------------------------------------------
 // Shell
 // ---------------------------------------------------------------------------------------------------------
-const TABS = [["review", "🎬", "Review"], ["ready", "✅", "Ready"], ["sources", "➕", "Sources"], ["browse", "🔎", "Browse"], ["stats", "📈", "Stats"], ["more", "⚙️", "More"]]
+const TABS = [["review", "🎬", "Review"], ["ready", "✅", "Ready"], ["sources", "➕", "Add"], ["campaigns", "🎯", "Campaigns"], ["stats", "📈", "Stats"], ["more", "⚙️", "More"]]
 
 function drawTabs(active, counts = {}) {
   tabs.hidden = false
@@ -46,7 +46,7 @@ async function render() {
     history.replaceState(null, "", "#more")
     setTimeout(() => toast(back === "connected" ? "TikTok connected ✅" : `TikTok: ${back}`, back === "connected" ? "" : "bad"), 300)
   }
-  const active = { source: "sources", clip: "ready", channels: "more" }[page] || page
+  const active = { source: "sources", clip: "ready", channels: "more", browse: "sources" }[page] || page
   let counts = {}
   try {
     const c = (await api("/clips?status=review")).counts || {}
@@ -62,6 +62,7 @@ async function render() {
     else if (page === "channels") await channelsPage(view)
     else if (page === "browse") await browsePage(view)
     else if (page === "stats") await statsPage(view)
+    else if (page === "campaigns") await campaignsPage(view)
     else if (page === "more") await morePage(view)
     else if (page === "clip") { await readyPage(view); openClip(+arg) }
     else { location.hash = "review"; return }
@@ -302,7 +303,7 @@ function sourceRow(s) {
   const clips = s.clips || {}
   const n = (clips.review || 0)
   return el("a", { class: "card", href: `#source/${s.id}`, style: { display: "block", color: "inherit", textDecoration: "none" } },
-    el("div", { class: "row" }, el("span", { text: PLATFORM_ICON[s.platform] || "🔗" }), el("b", { class: "grow ellipsis", text: s.title || s.url || "Upload" }),
+    el("div", { class: "row" }, el("span", { text: PLATFORM_ICON[s.platform] || "🔗" }), s.campaign_id ? el("span", { text: "🎯" }) : null, el("b", { class: "grow ellipsis", text: s.title || s.url || "Upload" }),
       el("span", { class: `chip ${kind}`, text: label })),
     el("div", { class: "small muted ellipsis", style: { marginTop: "4px" }, text: [s.creator, s.duration ? mmss(s.duration) : "", ago(s.created_at), s.kind].filter(Boolean).join(" · ") }),
     s.step ? el("div", { class: "small", style: { marginTop: "4px" }, text: s.step }) : null,
@@ -315,10 +316,17 @@ async function sourcesPage(view) {
   const url = el("input", { type: "url", placeholder: "https://youtube.com/watch?v=… / twitch.tv/videos/… / kick.com/…", inputmode: "url" })
   const perm = permSelect()
   const proof = el("input", { placeholder: "Proof: link or note (e.g. campaign page, creator's post)" })
+  const { campaigns: camps } = await api("/campaigns?show=all")
+  const pre = +(sessionStorage.getItem("campaignForUpload") || 0)
+  sessionStorage.removeItem("campaignForUpload")
+  const camp = el("select", {}, el("option", { value: "", text: "No campaign" }),
+    camps.filter((c) => c.joined || c.status === "open").map((c) => el("option", { value: c.id, text: `🎯 ${c.title.slice(0, 60)}`, selected: c.id === pre })))
+  camp.onchange = () => { if (camp.value) { perm.value = "campaign"; const c = camps.find((x) => x.id === +camp.value); if (c && !proof.value) proof.value = c.url } }
+  if (pre) camp.onchange()
   const add = el("button", { class: "btn primary", type: "button", text: "Make clips" })
   add.onclick = () => busy(add, async () => {
     if (!perm.value) throw new Error("Choose your permission first.")
-    await api("/sources", { method: "POST", json: { url: url.value.trim(), permission: perm.value, proof: proof.value } })
+    await api("/sources", { method: "POST", json: { url: url.value.trim(), permission: perm.value, proof: proof.value, campaign_id: camp.value ? +camp.value : null } })
     url.value = ""; proof.value = ""; toast("Added — it will start in a moment"); render()
   }).catch(() => {})
   const file = el("input", { type: "file", accept: "video/*" })
@@ -329,7 +337,7 @@ async function sourcesPage(view) {
     if (!file.files[0]) { toast("Choose a video file first.", "bad"); return }
     if (!perm.value) { toast("Choose your permission first.", "bad"); return }
     const f = file.files[0]
-    const q = new URLSearchParams({ name: f.name, permission: perm.value, proof: proof.value, title: f.name.replace(/\.[^.]+$/, "") })
+    const q = new URLSearchParams({ name: f.name, permission: perm.value, proof: proof.value, title: f.name.replace(/\.[^.]+$/, ""), campaign_id: camp.value || 0 })
     const x = new XMLHttpRequest()
     x.open("PUT", `/api/uploads?${q}`)
     x.setRequestHeader("X-CS", "1")
@@ -339,8 +347,8 @@ async function sourcesPage(view) {
     up.disabled = true
     x.send(f)
   }
-  view.append(el("h1", { text: "Sources" }),
-    el("div", { class: "card col" }, el("b", { text: "Add a video" }), url, perm, proof, add,
+  view.append(el("div", { class: "topbar" }, el("h1", { text: "Add" }), el("a", { class: "btn sm", href: "#browse", text: "🔎 Browse a YouTube channel" })),
+    el("div", { class: "card col" }, el("b", { text: "Add a video" }), url, perm, proof, el("label", { class: "field" }, "Campaign (adds its hashtags to the captions)", camp), add,
       el("details", {}, el("summary", { class: "small", style: { cursor: "pointer", fontWeight: 650 }, text: "…or upload a file (campaign footage)" }),
         el("div", { class: "col", style: { marginTop: "10px" } }, file, up, upProg)),
       el("p", { class: "hint", style: { margin: 0 }, text: "Only videos you're allowed to clip. Movies, TV, studio and sports content is refused automatically." })))
@@ -387,12 +395,13 @@ const bstate = { q: sessionStorage.getItem("browseQ") || "", channel: sessionSto
 function clipThisSheet(v, ch, watched, onDone) {
   const { body, close } = sheet("Make clips from this video")
   const last = (JSON.parse(localStorage.getItem("permByChannel") || "{}"))[ch.id] || {}
-  const perm = permSelect((watched && watched.permission !== "blocked" && watched.permission) || last.permission || "")
-  const proof = el("input", { value: last.proof || "", placeholder: "Proof: link or note" })
+  const campaignId = +(sessionStorage.getItem("browseCampaign") || 0)
+  const perm = permSelect(campaignId ? "campaign" : (watched && watched.permission !== "blocked" && watched.permission) || last.permission || "")
+  const proof = el("input", { value: campaignId ? `Campaign #${campaignId} in Clip Studio` : last.proof || "", placeholder: "Proof: link or note" })
   const go = el("button", { class: "btn primary", type: "button", text: "Make clips" })
   go.onclick = () => busy(go, async () => {
     if (!perm.value) throw new Error("Choose your permission first.")
-    await api("/sources", { method: "POST", json: { url: v.url, permission: perm.value, proof: proof.value, creator: ch.title } })
+    await api("/sources", { method: "POST", json: { url: v.url, permission: perm.value, proof: proof.value, creator: ch.title, campaign_id: campaignId || null } })
     try { const m = JSON.parse(localStorage.getItem("permByChannel") || "{}"); m[ch.id] = { permission: perm.value, proof: proof.value }; localStorage.setItem("permByChannel", JSON.stringify(m)) } catch (_) {}
     close(); toast("Added — clips in about 10 minutes"); onDone()
   }).catch(() => {})
@@ -406,7 +415,11 @@ async function browsePage(view) {
   const find = el("button", { class: "btn primary", type: "submit", text: "Find" })
   const form = el("form", { class: "row" }, q, find)
   form.onsubmit = (e) => { e.preventDefault(); bstate.q = q.value.trim(); bstate.channel = ""; bstate.page = ""; bstate.stack = []; sessionStorage.setItem("browseQ", bstate.q); sessionStorage.removeItem("browseCh"); render() }
-  view.append(el("h1", { text: "Browse YouTube" }), el("div", { class: "card col" }, form,
+  const campaignId = +(sessionStorage.getItem("browseCampaign") || 0)
+  view.append(el("h1", { text: "Browse YouTube" }),
+    campaignId ? el("div", { class: "card row small" }, el("span", { class: "grow", text: "🎯 Videos you clip here count for the campaign (its hashtags go into the captions)." }),
+      el("button", { class: "btn sm", type: "button", text: "Stop", onclick: () => { sessionStorage.removeItem("browseCampaign"); render() } })) : null,
+    el("div", { class: "card col" }, form,
     el("p", { class: "hint", style: { margin: 0 }, text: "Each page costs ~3 of 10,000 free YouTube units a day; a name search costs 100." })))
   if (!bstate.q && !bstate.channel) return
   const params = new URLSearchParams(bstate.channel ? { channel: bstate.channel, page: bstate.page } : { q: bstate.q })
@@ -452,6 +465,93 @@ async function browsePage(view) {
   next.onclick = () => { bstate.stack.push(bstate.page); bstate.page = r.next; render(); scrollTo(0, 0) }
   view.append(el("div", { class: "row", style: { justifyContent: "space-between", marginTop: "8px" } }, prev,
     el("span", { class: "small muted", text: `Page ${bstate.stack.length + 1}${r.total ? ` of ${Math.ceil(r.total / 24)}` : ""}` }), next))
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Campaigns
+// ---------------------------------------------------------------------------------------------------------
+const FLAG = {
+  needs_audio: ["🎵 needs a song/audio — breaks your music rule", "bad"], custom_edit: ["✂️ needs a custom edit (required text/segment)", "warn"],
+  budget_low: ["💸 budget almost used up", "warn"], other_platforms: ["📵 not your platforms", "bad"], product_cart: ["🛒 product cart", ""],
+}
+const rp = (n) => "Rp" + new Intl.NumberFormat("id-ID").format(n || 0)
+
+async function campaignsPage(view) {
+  const show = sessionStorage.getItem("campShow") || "open"
+  const r = await api(`/campaigns?show=${show}`)
+  const refresh = el("button", { class: "btn sm", type: "button", text: "↻ Refresh" })
+  refresh.onclick = () => busy(refresh, async () => { const x = await api("/campaigns/refresh", { method: "POST" }); toast(x.new ? `${x.new} new campaign(s)` : "Up to date"); render() }).catch(() => {})
+  view.append(el("div", { class: "topbar" }, el("h1", { text: "Campaigns" }), refresh),
+    el("div", { class: "seg" }, [["open", "Open"], ["joined", "Joined"], ["ended", "Ended"], ["hidden", "Hidden"], ["all", "All"]].map(([k, l]) =>
+      el("button", { class: `btn sm ${k === show ? "on" : ""}`, type: "button", text: l, onclick: () => { sessionStorage.setItem("campShow", k); render() } }))),
+    el("p", { class: "hint", style: { marginTop: 0 }, text: `Clippo's public list, checked every 3 hours${r.refreshed ? ` (last ${ago(r.refreshed)})` : ""}. Join in Clippo's app; Clip Studio does the clipping, hashtags and the links to submit.` }))
+  if (!r.campaigns.length) { view.append(el("div", { class: "empty" }, el("b", { text: "🎯" }), show === "open" ? "No campaigns yet — tap Refresh." : "Nothing here.")); return }
+  for (const c of r.campaigns) {
+    const card = el("div", { class: "card", style: { cursor: "pointer" }, onclick: () => campaignSheet(c) },
+      el("div", { class: "row", style: { alignItems: "flex-start" } },
+        c.image ? el("img", { src: c.image, alt: "", loading: "lazy", style: { width: "56px", height: "56px", borderRadius: "10px", objectFit: "cover" } }) : null,
+        el("div", { class: "grow", style: { minWidth: 0 } },
+          el("b", { text: c.title }),
+          el("div", { class: "small muted", text: `${c.creator} · ${c.platform}` }),
+          el("div", { class: "row wrap", style: { gap: "5px", marginTop: "6px" } },
+            el("span", { class: "chip accent", text: `${rp(c.rate)} / 1k views` }),
+            c.platforms.map((p) => el("span", { class: "chip", text: p })),
+            c.joined ? el("span", { class: "chip good", text: "✓ joined" }) : null,
+            c.status === "ended" ? el("span", { class: "chip", text: "ended" }) : null,
+            c.to_submit ? el("span", { class: "chip warn", text: `${c.to_submit} link(s) to submit` }) : null),
+          el("div", { class: "progress" }, el("i", { style: { width: `${Math.min(100, c.budget_used)}%`, background: c.budget_used >= 90 ? "var(--bad)" : "var(--accent)" } })),
+          el("div", { class: "small muted", style: { marginTop: "3px" }, text: `budget used ${Math.round(c.budget_used)}% · ${c.clippers.toLocaleString()} clippers${c.sources ? ` · ${c.sources} video(s), ${c.clips} clip(s) yours` : ""}` }),
+          c.flags.length ? el("div", { class: "row wrap", style: { gap: "5px", marginTop: "6px" } }, c.flags.map((f) => el("span", { class: `chip ${(FLAG[f] || ["", ""])[1]}`, text: (FLAG[f] || [f])[0] }))) : null)))
+    view.append(card)
+  }
+}
+
+async function campaignSheet(c) {
+  const { body, close } = sheet(c.title, { onClose: render })
+  const yt = c.footage.filter((f) => /youtube\.com\/watch|youtu\.be\/|youtube\.com\/shorts\//.test(f.url))
+  const joined = el("input", { type: "checkbox", checked: !!c.joined })
+  joined.onchange = async () => { try { await api(`/campaigns/${c.id}`, { method: "PATCH", json: { joined: joined.checked } }); toast(joined.checked ? "Marked as joined" : "Unmarked") } catch (e) { toast(e.message, "bad") } }
+  const clipBtn = el("button", { class: "btn primary", type: "button", text: `✂️ Clip the YouTube footage (${yt.length})`, disabled: !yt.length })
+  clipBtn.onclick = () => busy(clipBtn, async () => {
+    const x = await api(`/campaigns/${c.id}/clip`, { method: "POST" })
+    toast(x.added.length ? `${x.added.length} video(s) added — clips in ~10 min` : "Already added")
+  }).catch(() => {})
+  const upload = el("button", { class: "btn", type: "button", text: "⬆️ Upload campaign footage", onclick: () => { sessionStorage.setItem("campaignForUpload", c.id); close(); location.hash = "sources" } })
+  const tags = c.hashtags.join(" ")
+  const notes = el("textarea", { value: c.notes, placeholder: "Your notes (e.g. what the brief asks)" })
+  notes.onchange = async () => { try { await api(`/campaigns/${c.id}`, { method: "PATCH", json: { notes: notes.value } }); toast("Saved") } catch (e) { toast(e.message, "bad") } }
+  const hide = el("button", { class: "btn ghost", type: "button", text: c.hidden ? "Show again" : "Hide this campaign", onclick: async () => { await api(`/campaigns/${c.id}`, { method: "PATCH", json: { hidden: !c.hidden } }); close() } })
+  const sub = el("div", { class: "col" }, el("div", { class: "muted small", text: "Loading…" }))
+  body.append(
+    c.image ? el("img", { src: c.image, alt: "", style: { width: "100%", maxHeight: "220px", objectFit: "cover", borderRadius: "12px", marginBottom: "10px" } }) : null,
+    el("div", { class: "row wrap", style: { gap: "5px" } }, el("span", { class: "chip accent", text: `${rp(c.rate)} / 1k views` }), c.platforms.map((p) => el("span", { class: "chip", text: p })),
+      el("span", { class: "chip", text: `budget used ${Math.round(c.budget_used)}%` }), el("span", { class: "chip", text: `${c.clippers.toLocaleString()} clippers` })),
+    c.flags.length ? el("div", { class: "col", style: { gap: "4px", margin: "10px 0" } }, c.flags.map((f) => el("span", { class: `chip ${(FLAG[f] || ["", ""])[1]}`, style: { alignSelf: "flex-start" }, text: (FLAG[f] || [f])[0] }))) : null,
+    el("div", { class: "btns" }, el("a", { class: "btn primary", href: c.url, target: "_blank", rel: "noopener", text: "Join in Clippo ↗" })),
+    el("label", { class: "switch", style: { margin: "10px 0" } }, joined, "I joined this campaign"),
+    el("h2", { text: "Brief" }), el("pre", { class: "caption", text: c.brief || "(no brief)" }),
+    el("h2", { text: "Required hashtags" }),
+    el("div", { class: "row" }, el("div", { class: "grow small", text: tags || "none" }), tags ? el("button", { class: "btn sm", type: "button", text: "Copy", onclick: async () => { try { await navigator.clipboard.writeText(tags); toast("Copied") } catch (_) {} } }) : null),
+    el("p", { class: "hint", text: "Added automatically to every caption of clips made for this campaign." }),
+    el("h2", { text: `Footage (${c.footage.length})` }),
+    el("div", { class: "card small" }, c.footage.map((f) => el("div", { style: { padding: "6px 0", borderBottom: "1px solid var(--line)" } },
+      f.required ? el("span", { class: "chip warn", text: "required" }) : null, " ", el("a", { href: f.url, target: "_blank", rel: "noopener", text: f.url.replace(/^https?:\/\//, "").slice(0, 60) }),
+      f.text ? el("div", { class: "muted", text: f.text }) : null,
+      yt.includes(f) ? el("div", { class: "muted", text: "▶ YouTube — Clip Studio fetches it" })
+        : /youtube\.com\/(@|channel\/|c\/|user\/)/.test(f.url) ? el("a", { class: "btn sm", href: "#browse", text: "🔎 Browse this channel", onclick: () => { sessionStorage.setItem("browseQ", f.url); sessionStorage.removeItem("browseCh"); sessionStorage.setItem("browseCampaign", c.id); bstate.q = f.url; bstate.channel = ""; bstate.page = ""; bstate.stack = [] } })
+          : el("div", { class: "muted", text: "Download it yourself, then Upload" })))),
+    el("div", { class: "btns" }, clipBtn, upload),
+    el("h2", { text: "Ready to submit" }), sub,
+    el("h2", { text: "Notes" }), notes, el("div", { class: "btns" }, hide))
+  const { items } = await api(`/campaigns/${c.id}/submit`)
+  const pending = items.filter((i) => !i.submitted)
+  sub.replaceChildren(items.length ? [
+    ...items.map((i) => el("div", { class: "row small", style: { borderBottom: "1px solid var(--line)", padding: "5px 0" } },
+      el("span", { class: "grow ellipsis" }, `${i.submitted ? "✓ " : ""}${i.platform}: `, el("a", { href: i.url, target: "_blank", rel: "noopener", text: i.url.replace(/^https?:\/\//, "").slice(0, 45) })))),
+    pending.length ? el("div", { class: "btns" },
+      el("button", { class: "btn", type: "button", text: `Copy ${pending.length} link(s)`, onclick: async () => { try { await navigator.clipboard.writeText(pending.map((i) => i.url).join("\n")); toast("Copied — paste them in Clippo") } catch (_) {} } }),
+      el("button", { class: "btn good", type: "button", text: "Mark submitted", onclick: async (e) => { await busy(e.target, () => api(`/campaigns/${c.id}/submitted`, { method: "POST", json: { items: pending.map((i) => ({ clip_id: i.clip_id, platform: i.platform })) } })).catch(() => {}); close() } })) : el("div", { class: "muted small", text: "All submitted." }),
+  ] : el("div", { class: "muted small", text: "Posted clips of this campaign appear here with their links (TikTok: use Mark posted with the link after you post)." }))
 }
 
 // ---------------------------------------------------------------------------------------------------------

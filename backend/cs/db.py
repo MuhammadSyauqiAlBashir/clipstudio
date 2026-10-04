@@ -159,6 +159,31 @@ CREATE TABLE IF NOT EXISTS posts (     -- one row per clip and platform: a retry
   updated_at REAL NOT NULL,
   UNIQUE(clip_id, platform)
 );
+CREATE TABLE IF NOT EXISTS campaigns (  -- public campaign catalogue (kept forever; ended ones marked)
+  id INTEGER PRIMARY KEY,
+  platform TEXT NOT NULL,              -- clippo (more later)
+  ext_id TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  creator TEXT NOT NULL DEFAULT '',
+  rate INTEGER NOT NULL DEFAULT 0,     -- Rp per 1,000 views
+  platforms TEXT NOT NULL DEFAULT '[]',
+  budget_used REAL NOT NULL DEFAULT 0,
+  clippers INTEGER NOT NULL DEFAULT 0,
+  hashtags TEXT NOT NULL DEFAULT '[]',
+  footage TEXT NOT NULL DEFAULT '[]',
+  brief TEXT NOT NULL DEFAULT '',
+  image TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL DEFAULT '',
+  flags TEXT NOT NULL DEFAULT '[]',
+  info TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'open', -- open / ended
+  joined INTEGER NOT NULL DEFAULT 0,   -- the owner marks it after joining in the platform's app
+  hidden INTEGER NOT NULL DEFAULT 0,
+  notes TEXT NOT NULL DEFAULT '',
+  first_seen REAL NOT NULL,
+  last_seen REAL NOT NULL,
+  UNIQUE(platform, ext_id)
+);
 CREATE TABLE IF NOT EXISTS seen (
   platform TEXT NOT NULL,
   video_id TEXT NOT NULL,
@@ -220,6 +245,8 @@ def conn() -> sqlite3.Connection:
 ADDED_COLUMNS = {
     "posts": {"stats": "TEXT NOT NULL DEFAULT '{}'", "stats_at": "REAL NOT NULL DEFAULT 0",
               "scheduled": "INTEGER NOT NULL DEFAULT 0"},
+    "clips": {"submitted": "TEXT NOT NULL DEFAULT '{}'"},  # {"instagram": unix time submitted to the campaign}
+    "sources": {"campaign_id": "INTEGER"},
 }
 
 

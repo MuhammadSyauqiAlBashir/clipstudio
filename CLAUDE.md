@@ -96,6 +96,7 @@ the .jsonl).
 | Static | `/srv/clipstudio` |
 | Dev | `.venv` in the repo; `~/work/clipstudio-dev/dev.sh <script.py>` runs with the real keys against `~/work/clipstudio-dev/state`, capped like the worker. (Don't use `~/work/cs-dev`: it belongs to another project.) |
 | Auto-posting | `backend/cs/publish.py`: table `posts` (one row per clip+platform, idempotent), worker loop posts one at a time, ≥90 s apart per platform. Instagram: Meta app `bashclipeveryday` (dev mode, @bashclipeveryday as Instagram Tester, Instagram Login), `IG_ACCESS_TOKEN` seed in env, refreshed daily into DB `kv.ig_token` (60 days); Instagram fetches the final from a signed link `/api/pub/<clip>/<exp>/<sig>.mp4` (1 h, only while a post is pending; resumable upload needs Facebook Login). Settings `autopost` per platform (YouTube off by default) |
+| Campaigns | `backend/cs/campaigns.py`: Clippo's **public** list (`api.clippo.id/v1/campaigns`, no login) every 3 h into table `campaigns` (ended ones kept, marked `ended`); flags needs_audio / custom_edit / budget_low / other_platforms / product_cart; push on new campaigns. `sources.campaign_id` → required hashtags first in captions; "Clip it" imports YouTube footage; submit list per campaign (`clips.submitted`). Joining/submitting happen in Clippo's own app: automating the owner's logged-in Clippo account was **blocked by Claude Code's safety check** (even with the owner's `Bash(curl:*)` rule) — not built. AyoKlip/TryBuzzer: no public list; Konten.com check was blocked. CSP img-src also allows `flml.sgp1.cdn.digitaloceanspaces.com` (Caddyfile backup `~/work/Caddyfile.bak-20261005-000140`) |
 | Policy pages | `https://clips.bashir.my.id/privacy.html`, `/terms.html` (contact bashclip.everyday@gmail.com), icon `/icons/icon-1024.png` |
 | Checks | `systemctl is-active clipstudio clipstudio-worker`; `journalctl -u clipstudio-worker -f`; More tab in the app shows worker, queue, quotas, disk, keys, activity |
 
@@ -145,3 +146,7 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   now" overrides), daily reminder (19:00), weekly summary (Mon 09:00), Instagram insights every 6 h (works without an
   extra permission: first Reel 109 views), Stats tab (manual TikTok/YouTube views), Channels moved under More. DB
   migration helper (`db.ADDED_COLUMNS`). Owner's daily job = approving. 34 tests pass.
+- 2026-10-05 00:05 — Campaigns page (Clippo public catalogue, 12 campaigns loaded), tabs now Review · Ready · Add
+  (Browse inside) · Campaigns · Stats · More; campaign link on sources/uploads/Browse; required hashtags in captions;
+  submit-links list. Owner granted `Bash(curl:*)` (project-local) to build automated joining; the safety check still
+  blocked reading Clippo's login flow, so joining stays a tap in Clippo. 37 tests pass.
