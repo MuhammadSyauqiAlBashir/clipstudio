@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import logging
 import re
+import time
 import xml.etree.ElementTree as ET
 
 import httpx
@@ -111,14 +112,17 @@ async def resolve(text: str) -> dict:
 async def videos(ids: list[str]) -> list[dict]:
     out = []
     for i in range(0, len(ids), 50):
-        data = await _api("videos", {"part": "snippet,contentDetails,liveStreamingDetails", "id": ",".join(ids[i:i + 50])})
+        data = await _api("videos", {"part": "snippet,contentDetails,liveStreamingDetails,statistics",
+                                     "id": ",".join(ids[i:i + 50])})
         for it in data.get("items") or []:
             sn, ls = it.get("snippet", {}), it.get("liveStreamingDetails") or {}
             out.append({"id": it["id"], "title": sn.get("title", ""), "channel_id": sn.get("channelId", ""),
                         "channel_title": sn.get("channelTitle", ""), "published": sn.get("publishedAt", ""),
                         "state": sn.get("liveBroadcastContent", "none"),  # none / live / upcoming
                         "scheduled": ls.get("scheduledStartTime", ""), "ended": bool(ls.get("actualEndTime")),
-                        "duration": iso_duration(it.get("contentDetails", {}).get("duration", ""))})
+                        "duration": iso_duration(it.get("contentDetails", {}).get("duration", "")),
+                        "views": int((it.get("statistics") or {}).get("viewCount") or 0),
+                        "thumb": _thumb(sn.get("thumbnails") or {})})
     return out
 
 
@@ -139,3 +143,76 @@ async def subscribe(row_id: int, ext_id: str, mode: str = "subscribe") -> bool:
         log.warning("websub %s %s: %s %s", mode, ext_id, r.status_code, r.text[:200])
         return False
     return True
+
+
+# ---- browsing a channel's uploads (Browse page) -------------------------------------------------------
+def _thumb(t: dict) -> str:
+    for k in ("medium", "high", "default"):
+        if t.get(k, {}).get("url"):
+            return t[k]["url"]
+    return ""
+
+
+def video_id_of(text: str) -> str:
+    m = re.search(r"(?:v=|youtu\.be/|/shorts/|/live/|/embed/)([\w-]{11})", text)
+    return m.group(1) if m else ""
+
+
+async def channel_info(channel_id: str) -> dict:
+    cache = db.kv_get(f"ytch:{channel_id}")
+    if cache and cache.get("at", 0) > time.time() - 86400:
+        return cache
+    items = (await _api("channels", {"part": "snippet,contentDetails,statistics", "id": channel_id})).get("items") or []
+    if not items:
+        raise YTError("YouTube channel not found")
+    it = items[0]
+    sn, st = it["snippet"], it.get("statistics") or {}
+    handle = (sn.get("customUrl") or "").lstrip("@")
+    info = {"id": it["id"], "title": sn.get("title", ""), "handle": handle, "thumb": _thumb(sn.get("thumbnails") or {}),
+            "subscribers": int(st.get("subscriberCount") or 0), "video_count": int(st.get("videoCount") or 0),
+            "uploads": it.get("contentDetails", {}).get("relatedPlaylists", {}).get("uploads", ""),
+            "url": f"https://www.youtube.com/@{handle}" if handle else f"https://www.youtube.com/channel/{it['id']}",
+            "at": time.time()}
+    db.kv_set(f"ytch:{channel_id}", info)
+    return info
+
+
+async def find_channels(text: str) -> tuple[str, list[dict]]:
+    """A handle, channel link, channel id or video link → (channel_id, []); a plain name → ("", up to 6 matches).
+    Name search uses search.list (100 units), so it's only tried when nothing else matches."""
+    t = text.strip()
+    vid = video_id_of(t)
+    if vid:
+        v = await videos([vid])
+        if not v:
+            raise YTError("Video not found")
+        return v[0]["channel_id"], []
+    if re.search(r"UC[\w-]{22}", t) or "@" in t or "youtube.com/" in t:
+        return (await resolve(t))["ext_id"], []
+    try:  # maybe the text is a handle without @
+        if re.fullmatch(r"[\w.\-]{3,30}", t):
+            return (await resolve("@" + t))["ext_id"], []
+    except YTError:
+        pass
+    data = await _api("search", {"part": "snippet", "type": "channel", "q": t, "maxResults": 6})
+    db.usage_add("yt_units", 99)  # search.list costs 100 units (1 already counted)
+    out = [{"id": it["snippet"]["channelId"], "title": it["snippet"]["title"],
+            "thumb": _thumb(it["snippet"].get("thumbnails") or {}), "description": it["snippet"].get("description", "")[:120]}
+           for it in data.get("items") or []]
+    return "", out
+
+
+async def uploads_page(channel_id: str, page_token: str = "", per_page: int = 24) -> dict:
+    """One page of a channel's uploads, newest first (playlistItems + videos: 2 units)."""
+    ch = await channel_info(channel_id)
+    if not ch["uploads"]:
+        return {"channel": ch, "videos": [], "next": "", "prev": "", "total": 0}
+    params = {"part": "contentDetails", "playlistId": ch["uploads"], "maxResults": per_page}
+    if page_token:
+        params["pageToken"] = page_token
+    data = await _api("playlistItems", params)
+    ids = [it["contentDetails"]["videoId"] for it in data.get("items") or []]
+    info = {v["id"]: v for v in await videos(ids)} if ids else {}
+    vids = [info[i] for i in ids if i in info]
+    return {"channel": ch, "videos": vids, "next": data.get("nextPageToken", ""), "prev": data.get("prevPageToken", ""),
+            "total": (data.get("pageInfo") or {}).get("totalResults", 0)}

@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS channels (
   handle TEXT NOT NULL DEFAULT '',
   title TEXT NOT NULL DEFAULT '',
   url TEXT NOT NULL DEFAULT '',
-  permission TEXT NOT NULL DEFAULT 'blocked',  -- explicit / platform-default / campaign / blocked
+  permission TEXT NOT NULL DEFAULT 'blocked',  -- explicit / platform-default / campaign / implied / blocked
   proof TEXT NOT NULL DEFAULT '',
   campaign TEXT NOT NULL DEFAULT '{}', -- {"name","rate","url"}
   watch_uploads INTEGER NOT NULL DEFAULT 1,

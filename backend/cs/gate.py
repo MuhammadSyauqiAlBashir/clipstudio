@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import re
 
-PERMISSIONS = ("explicit", "platform-default", "campaign", "blocked")
+PERMISSIONS = ("explicit", "platform-default", "campaign", "implied", "blocked")
+# implied = the creator generally welcomes clips, but there is no written permission (owner's choice, 2026-10-04)
 
 
 def blocked_keyword(title: str, blocklist: str) -> str:

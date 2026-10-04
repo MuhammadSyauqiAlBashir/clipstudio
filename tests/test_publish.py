@@ -111,3 +111,57 @@ def test_signed_links(state):
         assert c.get(f"/api/pub/{cid}/{old}/{publish.sign(cid, old)}.mp4").status_code == 404  # expired
         db.execute("UPDATE posts SET status='done'")
         assert c.get(path).status_code == 404  # done: link dead
+
+
+def test_tiktok_state_and_chunks(state, monkeypatch):
+    from cs import config, tiktok
+    monkeypatch.setattr(config, "TIKTOK_CLIENT_KEY", "sbkey")
+    monkeypatch.setattr(config, "TIKTOK_CLIENT_SECRET", "sec")
+    url = tiktok.authorize_url()
+    assert "client_key=sbkey" in url and "video.upload" in url and "redirect_uri=https%3A%2F%2Fclips" in url
+    st = url.split("state=")[1]
+    assert not tiktok.check_state("wrong")          # wrong state burns the saved one
+    url = tiktok.authorize_url()
+    st = url.split("state=")[1]
+    assert tiktok.check_state(st) and not tiktok.check_state(st)  # single use
+    assert tiktok.chunk_plan(30 * 1024 * 1024) == (30 * 1024 * 1024, 1)
+    assert tiktok.chunk_plan(100 * 1024 * 1024) == (tiktok.CHUNK, 10)
+
+
+def test_tiktok_callback_and_draft(state, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from cs import config, db, main, publish, tiktok
+    monkeypatch.setattr(config, "TIKTOK_CLIENT_KEY", "sbkey")
+    monkeypatch.setattr(config, "TIKTOK_CLIENT_SECRET", "sec")
+
+    async def fake_finish(code):
+        db.kv_set("tiktok_auth", {"access_token": "a", "refresh_token": "r", "expires": time.time() + 9999,
+                                  "display_name": "bashclipeveryday"})
+    monkeypatch.setattr(tiktok, "finish_login", fake_finish)
+    with TestClient(main.app, follow_redirects=False) as c:
+        r = c.get("/api/tiktok/oauth?code=x&state=nope")
+        assert "failed" in r.headers["location"] and not tiktok.connected()
+        st = tiktok.authorize_url().split("state=")[1]
+        r = c.get(f"/api/tiktok/oauth?code=x&state={st}")
+        assert r.headers["location"] == "/#more?tiktok=connected" and tiktok.connected()
+
+    cid = make_clip(state)
+    publish.queue_for(cid)
+    assert {r["platform"] for r in db.all("SELECT platform FROM posts")} == {"instagram", "tiktok"}
+
+    async def up(path):
+        return "pub1"
+    seq = iter([("PROCESSING_UPLOAD", ""), ("SEND_TO_USER_INBOX", "")])
+
+    async def stat(pid):
+        return next(seq)
+    monkeypatch.setattr(tiktok, "upload_draft", up)
+    monkeypatch.setattr(tiktok, "status", stat)
+    db.execute("DELETE FROM posts WHERE platform='instagram'")
+    for _ in range(3):
+        db.execute("UPDATE posts SET not_before=0")
+        asyncio.run(publish.run_one())
+    p = db.one("SELECT * FROM posts WHERE platform='tiktok'")
+    assert p["status"] == "done" and p["remote_id"] == "pub1"
+    assert db.one("SELECT status FROM clips WHERE id=?", (cid,))["status"] == "ready"  # a draft isn't "posted"

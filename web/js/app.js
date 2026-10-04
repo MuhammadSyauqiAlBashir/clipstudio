@@ -10,6 +10,7 @@ const PERMS = [
   ["explicit", "Explicit — the creator said clipping is OK"],
   ["campaign", "Campaign — a clipping campaign gave the footage"],
   ["platform-default", "Platform default — Creative Commons / own content"],
+  ["implied", "Implied — the creator welcomes clips, no written permission"],
 ]
 const STATUS = {
   queued: ["Queued", ""], uploading: ["Uploading", ""], downloading: ["Downloading", "warn"], recording: ["🔴 Recording", "bad"],
@@ -24,7 +25,7 @@ setAuthHandler(() => { me = null; render() })
 // ---------------------------------------------------------------------------------------------------------
 // Shell
 // ---------------------------------------------------------------------------------------------------------
-const TABS = [["review", "🎬", "Review"], ["ready", "✅", "Ready"], ["sources", "➕", "Sources"], ["channels", "📡", "Channels"], ["more", "⚙️", "More"]]
+const TABS = [["review", "🎬", "Review"], ["ready", "✅", "Ready"], ["sources", "➕", "Sources"], ["browse", "🔎", "Browse"], ["channels", "📡", "Channels"], ["more", "⚙️", "More"]]
 
 function drawTabs(active, counts = {}) {
   tabs.hidden = false
@@ -38,7 +39,13 @@ async function render() {
     try { me = (await api("/me", { quiet: true })).me } catch (_) { me = null }
   }
   if (!me) return loginPage()
-  const [page, arg] = (location.hash.slice(1) || "review").split("/")
+  const [path, query] = (location.hash.slice(1) || "review").split("?")
+  const [page, arg] = path.split("/")
+  const back = new URLSearchParams(query || "").get("tiktok")
+  if (back) {
+    history.replaceState(null, "", "#more")
+    setTimeout(() => toast(back === "connected" ? "TikTok connected ✅" : `TikTok: ${back}`, back === "connected" ? "" : "bad"), 300)
+  }
   const active = { source: "sources", clip: "ready" }[page] || page
   let counts = {}
   try {
@@ -53,6 +60,7 @@ async function render() {
     else if (page === "sources") await sourcesPage(view)
     else if (page === "source") await sourcePage(view, +arg)
     else if (page === "channels") await channelsPage(view)
+    else if (page === "browse") await browsePage(view)
     else if (page === "more") await morePage(view)
     else if (page === "clip") { await readyPage(view); openClip(+arg) }
     else { location.hash = "review"; return }
@@ -258,12 +266,13 @@ async function openClip(id) {
     }
     const post = (c.posts || {})[p]
     const st = post ? { queued: "⏳ Waiting to post", uploading: "⬆️ Uploading…", processing: "⚙️ Processing on the platform…",
-      done: "✅ Posted automatically", failed: `⚠️ Failed: ${post.error}` }[post.status] : ""
+      done: p === "tiktok" ? "📥 Sent to your TikTok inbox — open TikTok to post it, then tap Mark posted" : "✅ Posted automatically",
+      failed: `⚠️ Failed: ${post.error}` }[post.status] : ""
     const pub = el("button", { class: "btn sm primary", type: "button", text: post && post.status === "failed" ? "Retry" : "Post now" })
     pub.onclick = () => busy(pub, async () => { c = (await api(`/clips/${c.id}/publish`, { method: "POST", json: { platform: p } })).clip; pub.remove(); toast("Posting…") }).catch(() => {})
     const canPost = c.has_final && (!post || post.status === "failed") && !(c.posted || {})[p] && accounts && accounts[p] && accounts[p].connected
     body.append(el("div", { class: "card", style: { marginTop: "10px" } },
-      el("div", { class: "row" }, el("b", { class: "grow", text: label }), canPost ? pub : null, copy, c.has_final && !(post && post.status === "done") ? mark : null),
+      el("div", { class: "row" }, el("b", { class: "grow", text: label }), canPost ? pub : null, copy, c.has_final && !(post && post.status === "done" && p !== "tiktok") ? mark : null),
       st ? el("div", { class: "small", style: { marginTop: "4px", color: post.status === "failed" ? "var(--bad)" : "inherit" } }, st,
         post.url ? el("span", {}, " · ", el("a", { href: post.url, target: "_blank", rel: "noopener", text: "open" })) : null) : null,
       el("pre", { class: "caption", text: c.captions[p] })))
@@ -364,6 +373,82 @@ async function sourcePage(view, id) {
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Browse: find a YouTube channel and pick videos from its uploads
+// ---------------------------------------------------------------------------------------------------------
+const nf = new Intl.NumberFormat("en", { notation: "compact" })
+const bstate = { q: sessionStorage.getItem("browseQ") || "", channel: sessionStorage.getItem("browseCh") || "", page: "", stack: [], hideShorts: sessionStorage.getItem("hideShorts") !== "0" }
+
+function clipThisSheet(v, ch, watched, onDone) {
+  const { body, close } = sheet("Make clips from this video")
+  const last = (JSON.parse(localStorage.getItem("permByChannel") || "{}"))[ch.id] || {}
+  const perm = permSelect((watched && watched.permission !== "blocked" && watched.permission) || last.permission || "")
+  const proof = el("input", { value: last.proof || "", placeholder: "Proof: link or note" })
+  const go = el("button", { class: "btn primary", type: "button", text: "Make clips" })
+  go.onclick = () => busy(go, async () => {
+    if (!perm.value) throw new Error("Choose your permission first.")
+    await api("/sources", { method: "POST", json: { url: v.url, permission: perm.value, proof: proof.value, creator: ch.title } })
+    try { const m = JSON.parse(localStorage.getItem("permByChannel") || "{}"); m[ch.id] = { permission: perm.value, proof: proof.value }; localStorage.setItem("permByChannel", JSON.stringify(m)) } catch (_) {}
+    close(); toast("Added — clips in about 10 minutes"); onDone()
+  }).catch(() => {})
+  body.append(el("img", { src: v.thumb, alt: "", style: { width: "100%", borderRadius: "12px", aspectRatio: "16/9", objectFit: "cover" } }),
+    el("b", { text: v.title }), el("div", { class: "small muted", style: { margin: "4px 0 12px" }, text: `${ch.title} · ${mmss(v.duration)} · ${nf.format(v.views)} views` }),
+    el("div", { class: "col" }, perm, proof, el("p", { class: "hint", style: { margin: 0 }, text: "Your choice is remembered for this channel." }), go))
+}
+
+async function browsePage(view) {
+  const q = el("input", { value: bstate.q, placeholder: "@handle, channel link, video link or name", autocapitalize: "none" })
+  const find = el("button", { class: "btn primary", type: "submit", text: "Find" })
+  const form = el("form", { class: "row" }, q, find)
+  form.onsubmit = (e) => { e.preventDefault(); bstate.q = q.value.trim(); bstate.channel = ""; bstate.page = ""; bstate.stack = []; sessionStorage.setItem("browseQ", bstate.q); sessionStorage.removeItem("browseCh"); render() }
+  view.append(el("h1", { text: "Browse YouTube" }), el("div", { class: "card col" }, form,
+    el("p", { class: "hint", style: { margin: 0 }, text: "Each page costs ~3 of 10,000 free YouTube units a day; a name search costs 100." })))
+  if (!bstate.q && !bstate.channel) return
+  const params = new URLSearchParams(bstate.channel ? { channel: bstate.channel, page: bstate.page } : { q: bstate.q })
+  const r = await api(`/browse/youtube?${params}`)
+  if (r.choices) {
+    if (!r.choices.length) { view.append(el("div", { class: "empty" }, el("b", { text: "🤷" }), "No channel found.")); return }
+    view.append(el("h2", { text: "Which channel?" }), r.choices.map((c) => el("div", { class: "card row", style: { cursor: "pointer" }, onclick: () => { bstate.channel = c.id; sessionStorage.setItem("browseCh", c.id); render() } },
+      el("img", { src: c.thumb, alt: "", style: { width: "48px", height: "48px", borderRadius: "50%" } }),
+      el("div", { class: "grow" }, el("b", { text: c.title }), el("div", { class: "small muted ellipsis", text: c.description })))))
+    return
+  }
+  const ch = r.channel
+  bstate.channel = ch.id
+  sessionStorage.setItem("browseCh", ch.id)
+  const hide = el("input", { type: "checkbox", checked: bstate.hideShorts })
+  hide.onchange = () => { bstate.hideShorts = hide.checked; sessionStorage.setItem("hideShorts", hide.checked ? "1" : "0"); render() }
+  view.append(el("div", { class: "card row" },
+    el("img", { src: ch.thumb, alt: "", style: { width: "56px", height: "56px", borderRadius: "50%" } }),
+    el("div", { class: "grow" }, el("b", { text: ch.title }), el("div", { class: "small muted", text: `${ch.handle ? "@" + ch.handle + " · " : ""}${nf.format(ch.subscribers)} subscribers · ${nf.format(ch.video_count)} videos` }),
+      r.watched ? el("span", { class: "chip good", text: `📡 watched (${r.watched.permission})` }) : null),
+    el("a", { class: "btn sm", href: ch.url, target: "_blank", rel: "noopener", text: "Open" })),
+    el("label", { class: "switch", style: { margin: "4px 0 10px" } }, hide, "Hide Shorts and videos under 3 minutes"))
+  const vids = r.videos.filter((v) => !(bstate.hideShorts && v.duration < 180))
+  if (!vids.length) view.append(el("div", { class: "empty" }, "No long videos on this page."))
+  for (const v of vids) {
+    const live = v.state === "live" ? "🔴 LIVE" : v.state === "upcoming" ? "⏰ upcoming" : ""
+    const action = v.added
+      ? el("a", { class: "btn sm", href: `#source/${v.added.id}`, text: `✓ Added · ${(STATUS[v.added.status] || [v.added.status])[0]}` })
+      : live ? el("span", { class: "chip", text: live })
+        : el("button", { class: "btn sm primary", type: "button", text: "✂️ Clip this", onclick: () => clipThisSheet(v, ch, r.watched, render) })
+    view.append(el("div", { class: "card", style: { display: "grid", gridTemplateColumns: "140px 1fr", gap: "12px", padding: "10px" } },
+      el("a", { href: v.url, target: "_blank", rel: "noopener", style: { position: "relative", display: "block" } },
+        el("img", { src: v.thumb, alt: "", loading: "lazy", style: { width: "140px", aspectRatio: "16/9", objectFit: "cover", borderRadius: "8px", display: "block" } }),
+        el("span", { class: "chip", style: { position: "absolute", right: "4px", bottom: "4px", background: "rgba(0,0,0,.75)", color: "#fff" }, text: mmss(v.duration) })),
+      el("div", { class: "col", style: { gap: "4px", minWidth: 0 } },
+        el("b", { style: { fontSize: "14px", lineHeight: 1.3 }, text: v.title }),
+        el("div", { class: "small muted", text: `${new Date(v.published).toLocaleDateString()} · ${nf.format(v.views)} views` }),
+        el("div", {}, action))))
+  }
+  const prev = el("button", { class: "btn", type: "button", text: "← Newer", disabled: !bstate.stack.length })
+  prev.onclick = () => { bstate.page = bstate.stack.pop() || ""; render(); scrollTo(0, 0) }
+  const next = el("button", { class: "btn", type: "button", text: "Older →", disabled: !r.next })
+  next.onclick = () => { bstate.stack.push(bstate.page); bstate.page = r.next; render(); scrollTo(0, 0) }
+  view.append(el("div", { class: "row", style: { justifyContent: "space-between", marginTop: "8px" } }, prev,
+    el("span", { class: "small muted", text: `Page ${bstate.stack.length + 1}${r.total ? ` of ${Math.ceil(r.total / 24)}` : ""}` }), next))
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Channels
 // ---------------------------------------------------------------------------------------------------------
 async function channelsPage(view) {
@@ -451,11 +536,18 @@ async function morePage(view) {
     Object.entries(accounts).map(([k, a]) => {
       const t = el("input", { type: "checkbox", checked: a.autopost, disabled: !a.connected })
       t.onchange = async () => { try { await api("/accounts/autopost", { method: "PUT", json: { platform: k, on: t.checked } }); toast(t.checked ? `${names[k]}: auto-post on` : `${names[k]}: auto-post off`) } catch (e) { toast(e.message, "bad") } }
-      return el("div", { class: "row", style: { padding: "6px 0", borderTop: "1px solid var(--line)" } },
+      let action = null
+      if (k === "tiktok" && a.can_connect) {
+        action = a.connected
+          ? el("button", { class: "btn sm", type: "button", text: "Disconnect", onclick: async (e) => { if (!confirm("Disconnect TikTok?")) return; await busy(e.target, () => api("/tiktok/disconnect", { method: "POST" })).catch(() => {}); render() } })
+          : el("a", { class: "btn sm primary", href: "/api/tiktok/connect", text: "Connect TikTok" })
+      }
+      return el("div", { class: "row wrap", style: { padding: "6px 0", borderTop: "1px solid var(--line)" } },
         el("div", { class: "grow" }, el("b", { text: names[k] }),
-          el("div", { class: "small muted", text: a.connected ? `Connected${a.username ? ` as @${a.username}` : ""}${a.expires ? ` · token renews itself` : ""}` : (a.note || "Not connected") }),
+          el("div", { class: "small muted", text: a.connected ? `Connected${a.username ? ` as ${k === "tiktok" ? "" : "@"}${a.username}` : ""}${a.expires ? " · token renews itself" : ""}` : "Not connected" }),
+          el("div", { class: "small muted", text: a.note || "" }),
           a.error ? el("div", { class: "small", style: { color: "var(--bad)" }, text: a.error }) : null),
-        el("label", { class: "switch" }, t))
+        action, el("label", { class: "switch" }, t))
     })))
   view.append(el("h2", { text: "Status" }), el("div", { class: "card" },
     el("dl", { class: "kv" },

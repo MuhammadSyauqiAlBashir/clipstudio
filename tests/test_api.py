@@ -138,3 +138,26 @@ def test_twitch_callback(client):
     bad = headers("m2", "notification")
     bad["Twitch-Eventsub-Message-Signature"] = "sha256=00"
     assert client.post("/api/twitch/callback", content=body, headers=bad).status_code == 403
+
+
+def test_browse_marks_added_and_blocks_duplicates(client, monkeypatch):
+    from cs import yt
+
+    async def find(q):
+        return ("UCabc", []) if "@" in q else ("", [{"id": "UCx", "title": "X", "thumb": "", "description": ""}])
+
+    async def page(cid, token=""):
+        return {"channel": {"id": cid, "title": "Chan", "handle": "chan", "thumb": "", "subscribers": 1, "video_count": 2,
+                            "url": "u", "uploads": "UU", "at": 0},
+                "videos": [{"id": "abcdefghijk", "title": "V1", "duration": 3000, "views": 5, "state": "none", "thumb": "",
+                            "published": "2026-01-01T00:00:00Z", "channel_id": cid}],
+                "next": "N", "prev": "", "total": 30}
+    monkeypatch.setattr(yt, "find_channels", find)
+    monkeypatch.setattr(yt, "uploads_page", page)
+    assert client.get("/api/browse/youtube?q=name").json()["choices"][0]["id"] == "UCx"
+    r = client.get("/api/browse/youtube?q=@chan").json()
+    assert r["videos"][0]["added"] is None and r["next"] == "N"
+    url = "https://www.youtube.com/watch?v=abcdefghijk"
+    assert client.post("/api/sources", json={"url": url, "permission": "implied"}).status_code == 200
+    assert client.get("/api/browse/youtube?channel=UCabc").json()["videos"][0]["added"]["status"] == "queued"
+    assert client.post("/api/sources", json={"url": "https://youtu.be/abcdefghijk", "permission": "implied"}).status_code == 409
