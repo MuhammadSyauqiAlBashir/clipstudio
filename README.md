@@ -5,7 +5,9 @@ and Kick channels — new uploads and live streams) → best moments as 9:16 cli
 (540×960 previews) → full-quality 1080×1920 render on approval → manual posting (save/share + copy caption).
 Live at https://clips.bashir.my.id (login: `bashirsyauqi`, `bells`).
 
-**Status: Phases 1–3 built and deployed 2026-10-04.** Publishing APIs (Phase 4) not built: posting is manual.
+**Status (2026-10-05):** Phases 1–3 live, plus: Instagram Reels auto-posting, TikTok inbox drafts (sandbox; app
+review submitted), posting schedule + reminders + weekly summary, Stats, Browse (YouTube channel uploads), and a
+Campaigns page (Clippo's public catalogue). YouTube uploads wait for the owner's OAuth client + Google's audit.
 
 | Doc | What |
 |---|---|
@@ -34,6 +36,9 @@ link / upload / watcher ─▶ gate ─▶ yt-dlp (≤1080p, ≤4 h) ─▶ Groq
 | Watchers | `watch.py` + `yt.py` (WebSub + RSS + `videos.list`), `twitch.py` (EventSub + Helix), `kick.py` (API poll, live only) |
 | Data | Own SQLite `/var/lib/clipstudio/clipstudio.db` (WAL); work files `/var/lib/clipstudio/work/s<id>/`, finals `/var/lib/clipstudio/clips/` |
 | Login | Shared PocketBase `users`, **read-only** (password check + refresh); only `CS_ALLOWED_USERS` |
+| Auto-posting | `publish.py` (Instagram Reels via signed temporary links, TikTok inbox drafts via `tiktok.py`), table `posts` (one per clip+platform), schedule slots in WIB |
+| Autopilot | `autopilot.py`: daily reminder, weekly summary, Instagram insights every 6 h |
+| Campaigns | `campaigns.py`: Clippo public list every 3 h (kept forever), flags, required hashtags into captions (`posttext.py`), footage import, submit list |
 | Front end | `web/` — static PWA (plain ES modules), served by Caddy from `/srv/clipstudio` |
 | Secrets | `/etc/clipstudio/env` (`root:clipstudio 640`): `GEMINI_API_KEY`, `GROQ_API_KEY`, `YT_API_KEY`, optional `TWITCH_CLIENT_ID/SECRET`, `KICK_CLIENT_ID/SECRET`; cookies `/etc/clipstudio/youtube-cookies.txt` (optional) |
 
