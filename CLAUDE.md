@@ -36,6 +36,11 @@ the .jsonl).
 - **Permission "implied"** (added 2026-10-04 at the owner's request): the creator generally welcomes clips but gave no
   written permission (e.g. Indonesian podcasters who see clips as free promotion). The owner accepted that risk after
   being told it isn't permission (first case: Raditya Dika podcast). Keep the choice explicit and recorded per source.
+- **Heavy one-off commands (ffmpeg, video edits, tests on real videos) always run memory-capped:**
+  `systemd-run --user --scope -q -p MemoryMax=500M -p MemorySwapMax=0 -p CPUQuota=100% nice -n 19 ionice -c3 <cmd>`
+  (or `~/work/clipstudio-dev/dev.sh`). On 2026-10-04 an uncapped ffmpeg with several `trim`s of one input buffered raw
+  2.5K frames, filled RAM + swap and froze the whole server (owner rebooted via Biznet at 22:51; all data checked OK).
+  Cut segments with separate `-ss/-to` runs + the concat demuxer instead.
 - Free services only (owner is budget-conscious). Anything billable (paid APIs, server upgrade) needs the owner's OK.
 - Keep Clip Studio **off** Cloudflare Workers AI (the shop's FLUX budget) and Shazam (lyrsync's budget).
 - Gemini: use **only Clip Studio's own project key** (`clipstudio-ai`). One project per app is the owner's rule;
@@ -130,3 +135,7 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   Submit. Browse page (YouTube channel uploads, 24 per page, ~3 units/page, name search 100 units). Permission
   "implied" added. Caption language made explicit. CSP img-src allows i.ytimg.com + yt3.ggpht.com (Caddyfile backup
   `~/work/Caddyfile.bak-20261004-215602`). First real source: Raditya Dika podcast (implied), 8 clips in review.
+- 2026-10-04 22:35 — Server froze (my uncapped ffmpeg demo edit, see the rule above); rebooted 22:51; all services,
+  PocketBase and Clip Studio DB integrity OK. Demo videos re-cut safely: `~/work/tiktok-demo-1-pc.mp4` (2:35),
+  `~/work/tiktok-demo-2-phone.mp4` (0:18). First Instagram Reel posted automatically 22:24
+  (https://www.instagram.com/reel/DeE8p2qFAzl/); TikTok draft delivered.
