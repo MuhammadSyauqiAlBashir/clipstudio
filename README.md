@@ -1,10 +1,10 @@
 # Clip Studio
 
-Private clipping tool: long videos (pasted links + automatically watched YouTube channels, new uploads and live
+Private clipping tool: long videos (pasted links, campaign files and automatically watched YouTube, Twitch and Kick channels, new uploads and live
 streams) → best moments as 9:16 clips with captions → owner review → posting (manual first). Planned at
 https://clips.bashir.my.id on the owner's VPS.
 
-**Status: design only (2026-10-04).**
+**Status: design done, interview done (2026-10-04); Phase 1 next.**
 
 | Doc | What |
 |---|---|

@@ -103,3 +103,13 @@ Don't install OpenShorts/SupoClip; their Docker stacks + local models need 8 GB+
 2 vCPU, 1.97 GB RAM (+2 GB swap), 47 GB free disk. Apps together ~350 MB; Claude Code sessions ~585 MB and the VS Code
 remote server ~300 MB are the big users. With Claude/VS Code open, idle apps get swapped (first request 2.4 s, then
 0.11 s). CPU ~90% idle. See DESIGN.md §6 for the budget.
+
+## 10. Twitch and Kick (added 2026-10-04, after the owner asked for all three platforms)
+
+| Topic | Finding |
+|---|---|
+| Twitch detection | EventSub **webhook** transport needs an **app access token**; `stream.online` without a scope costs 1, and each Client ID has `max_total_cost` 10,000 → thousands of channels for free. Twitch POSTs `webhook_callback_verification` / `notification` / `revocation`, signed with our secret. Max 3 subscriptions with the same type + condition ([manage subscriptions](https://dev.twitch.tv/docs/eventsub/manage-subscriptions/), [subscription types](https://dev.twitch.tv/docs/eventsub/eventsub-subscription-types/), [guide](https://hookdeck.com/webhooks/platforms/guide-to-twitch-webhooks-features-and-best-practices)) |
+| Twitch download | streamlink / yt-dlp handle live and VODs well; VODs are kept 7 days (14 for affiliates, 60 for partners) |
+| Kick detection | Official public API with a `livestream.status.updated` webhook (headers `Kick-Event-Type`, `Kick-Event-Version`); needs a developer app, webhooks enabled and a public URL ([payloads](https://pumpfundler.mintlify.app/en/events/webhook-payloads), [monitoring guide](https://streamable.run/el/blog/kick-api-webhooks-stream-status-cloud-obs-monitoring)) |
+| Kick download | **Fragile.** Kick is behind Cloudflare; yt-dlp's `kick:vod` failed with 404 after a 2026 site change and 403 in newer versions ([#17284](https://github.com/yt-dlp/yt-dlp/issues/17284), [#14444](https://github.com/yt-dlp/yt-dlp/issues/14444)). The streamlink Kick plugin uses `cloudscraper` to get past Cloudflare ([plugin](https://github.com/nonvegan/streamlink-plugin-kick)) — **we don't bypass Cloudflare**; a blocked Kick source fails with the reason |
+| Server impact | Recording is network + disk, little CPU, the same for all platforms; more watched channels only lengthen the queue. The shared limit is Groq's 8 h audio/day |
