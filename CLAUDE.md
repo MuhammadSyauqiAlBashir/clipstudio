@@ -94,12 +94,12 @@ Full click-by-click guide: `~/work/clipstudio-owner-setup.md`.
 - [ ] iPhone: open https://clips.bashir.my.id in Safari → Share → Add to Home Screen → open it → More → Turn on
       notifications. Try the review flow on the test clips (source added by Claude: a CC-BY interview).
 - [ ] Clip brand name + new Google account (clips) + YouTube channel, TikTok, Instagram (Creator) — before posting.
-- [ ] Twitch account + 2FA + developer app → `TWITCH_CLIENT_ID/SECRET` (hidden-input command), then
+- [ ] (Postponed by owner 2026-10-04: no 2FA yet) Twitch account + 2FA + developer app → `TWITCH_CLIENT_ID/SECRET` (hidden-input command), then
       `sudo systemctl restart clipstudio clipstudio-worker`.
-- [ ] Kick account + 2FA + developer app → `KICK_CLIENT_ID/SECRET` (same). Kick webhooks stay OFF (the app polls).
-- [ ] Throwaway YouTube account → cookies file → `/etc/clipstudio/youtube-cookies.txt` (only used when YouTube blocks).
+- [ ] (Postponed by owner 2026-10-04) Kick account + 2FA + developer app → `KICK_CLIENT_ID/SECRET` (same). Kick webhooks stay OFF (the app polls).
 - [ ] Channel/campaign list (with proof of permission) → add in the Channels tab.
-- Done 2026-10-04: interview; Groq + YouTube keys (tested); Biznet traffic is unlimited.
+- Done 2026-10-04: interview; Groq + YouTube keys (tested); Biznet traffic is unlimited; throwaway YouTube cookies
+  installed (`root:clipstudio 640`, login cookies present); owner tested the review flow; test data deleted.
 
 ## History
 
