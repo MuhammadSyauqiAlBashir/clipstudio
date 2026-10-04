@@ -87,7 +87,8 @@ function loginPage() {
   const p = el("input", { type: "password", autocomplete: "current-password", placeholder: "Password" })
   const go = el("button", { class: "btn primary", type: "submit", text: "Log in" })
   const form = el("form", { class: "card col login" }, el("div", { class: "logo", text: "✂️" }), el("h1", { text: "Clip Studio", style: { textAlign: "center" } }),
-    el("p", { class: "muted small", style: { textAlign: "center", margin: 0 }, text: "Use your household account." }), u, p, go)
+    el("p", { class: "muted small", style: { textAlign: "center", margin: 0 }, text: "Use your household account." }), u, p, go,
+    el("p", { class: "small", style: { textAlign: "center", margin: 0 } }, el("a", { href: "/privacy.html", text: "Privacy" }), " · ", el("a", { href: "/terms.html", text: "Terms" })))
   form.onsubmit = (e) => {
     e.preventDefault()
     busy(go, async () => { me = (await api("/login", { method: "POST", json: { username: u.value.trim(), password: p.value } })).me; location.hash = "review"; render() }).catch(() => {})
