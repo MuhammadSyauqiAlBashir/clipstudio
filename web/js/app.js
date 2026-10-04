@@ -25,7 +25,7 @@ setAuthHandler(() => { me = null; render() })
 // ---------------------------------------------------------------------------------------------------------
 // Shell
 // ---------------------------------------------------------------------------------------------------------
-const TABS = [["review", "🎬", "Review"], ["ready", "✅", "Ready"], ["sources", "➕", "Sources"], ["browse", "🔎", "Browse"], ["channels", "📡", "Channels"], ["more", "⚙️", "More"]]
+const TABS = [["review", "🎬", "Review"], ["ready", "✅", "Ready"], ["sources", "➕", "Sources"], ["browse", "🔎", "Browse"], ["stats", "📈", "Stats"], ["more", "⚙️", "More"]]
 
 function drawTabs(active, counts = {}) {
   tabs.hidden = false
@@ -46,7 +46,7 @@ async function render() {
     history.replaceState(null, "", "#more")
     setTimeout(() => toast(back === "connected" ? "TikTok connected ✅" : `TikTok: ${back}`, back === "connected" ? "" : "bad"), 300)
   }
-  const active = { source: "sources", clip: "ready" }[page] || page
+  const active = { source: "sources", clip: "ready", channels: "more" }[page] || page
   let counts = {}
   try {
     const c = (await api("/clips?status=review")).counts || {}
@@ -61,6 +61,7 @@ async function render() {
     else if (page === "source") await sourcePage(view, +arg)
     else if (page === "channels") await channelsPage(view)
     else if (page === "browse") await browsePage(view)
+    else if (page === "stats") await statsPage(view)
     else if (page === "more") await morePage(view)
     else if (page === "clip") { await readyPage(view); openClip(+arg) }
     else { location.hash = "review"; return }
@@ -217,7 +218,8 @@ async function readyPage(view) {
         c.reject_reason ? el("div", { class: "small muted", text: `Reason: ${c.reject_reason}` }) : null,
         c.note ? el("div", { class: "small", style: { color: "var(--bad)" }, text: c.note }) : null,
         Object.keys(c.posted || {}).length ? el("div", { class: "small muted", text: `Posted on: ${Object.keys(c.posted).join(", ")}` }) : null,
-        Object.entries(c.posts || {}).filter(([, v]) => v.status !== "done").map(([k, v]) => el("div", { class: "small", style: { color: v.status === "failed" ? "var(--bad)" : "var(--muted)" }, text: `${k}: ${v.status === "failed" ? "failed — open to retry" : "posting…"}` })),
+        Object.entries(c.posts || {}).filter(([, v]) => v.status !== "done").map(([k, v]) => el("div", { class: "small", style: { color: v.status === "failed" ? "var(--bad)" : "var(--muted)" },
+          text: `${k}: ${v.status === "failed" ? "failed — open to retry" : v.status === "queued" && v.at * 1000 > Date.now() ? `🗓 ${new Date(v.at * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : "posting…"}` })),
         el("div", { class: "small muted ellipsis", text: `${c.source.creator} · ${c.source.title}` }))),
       el("div", { style: { padding: "0 12px 12px" } },
         el("button", { class: "btn primary", style: { width: "100%" }, type: "button", text: c.status === "ready" || c.status === "posted" ? "Open · download · copy caption" : "Open", onclick: () => openClip(c.id) })))
@@ -265,16 +267,20 @@ async function openClip(id) {
       try { c = (await api(`/clips/${c.id}/posted`, { method: "POST", json: { platform: p, url: link } })).clip; mark.textContent = "✓ Posted"; toast("Saved") } catch (e) { toast(e.message, "bad") }
     }
     const post = (c.posts || {})[p]
-    const st = post ? { queued: "⏳ Waiting to post", uploading: "⬆️ Uploading…", processing: "⚙️ Processing on the platform…",
+    const when = (t) => new Date(t * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })
+    const scheduled = post && post.status === "queued" && post.at * 1000 > Date.now()
+    const st = post ? { queued: scheduled ? `🗓 Scheduled for ${when(post.at)}` : "⏳ Waiting to post", uploading: "⬆️ Uploading…", processing: "⚙️ Processing on the platform…",
       done: p === "tiktok" ? "📥 Sent to your TikTok inbox — open TikTok to post it, then tap Mark posted" : "✅ Posted automatically",
       failed: `⚠️ Failed: ${post.error}` }[post.status] : ""
     const pub = el("button", { class: "btn sm primary", type: "button", text: post && post.status === "failed" ? "Retry" : "Post now" })
+    const views = post && post.status === "done" ? (post.stats.views ?? post.stats.reach) : undefined
     pub.onclick = () => busy(pub, async () => { c = (await api(`/clips/${c.id}/publish`, { method: "POST", json: { platform: p } })).clip; pub.remove(); toast("Posting…") }).catch(() => {})
-    const canPost = c.has_final && (!post || post.status === "failed") && !(c.posted || {})[p] && accounts && accounts[p] && accounts[p].connected
+    const canPost = c.has_final && (!post || post.status === "failed" || scheduled) && !(c.posted || {})[p] && accounts && accounts[p] && accounts[p].connected
     body.append(el("div", { class: "card", style: { marginTop: "10px" } },
       el("div", { class: "row" }, el("b", { class: "grow", text: label }), canPost ? pub : null, copy, c.has_final && !(post && post.status === "done" && p !== "tiktok") ? mark : null),
       st ? el("div", { class: "small", style: { marginTop: "4px", color: post.status === "failed" ? "var(--bad)" : "inherit" } }, st,
-        post.url ? el("span", {}, " · ", el("a", { href: post.url, target: "_blank", rel: "noopener", text: "open" })) : null) : null,
+        post.url ? el("span", {}, " · ", el("a", { href: post.url, target: "_blank", rel: "noopener", text: "open" })) : null,
+        views !== undefined ? ` · 👁 ${views.toLocaleString()} views` : "") : null,
       el("pre", { class: "caption", text: c.captions[p] })))
   }
   const edit = el("button", { class: "btn", type: "button", text: "✏️ Edit text" })
@@ -449,6 +455,40 @@ async function browsePage(view) {
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Stats
+// ---------------------------------------------------------------------------------------------------------
+async function statsPage(view) {
+  const days = +(sessionStorage.getItem("statsDays") || 30)
+  const r = await api(`/stats?days=${days}`)
+  const names = { instagram: "Instagram", tiktok: "TikTok", youtube: "YouTube" }
+  view.append(el("h1", { text: "Stats" }),
+    el("div", { class: "seg" }, [7, 30, 90].map((d) => el("button", { class: `btn sm ${d === days ? "on" : ""}`, type: "button", text: `${d} days`, onclick: () => { sessionStorage.setItem("statsDays", d); render() } }))),
+    el("div", { class: "card" }, el("dl", { class: "kv" },
+      el("dt", { text: "Views" }), el("dd", { text: r.views.toLocaleString() }),
+      ...Object.entries(r.totals).flatMap(([k, v]) => [el("dt", { text: names[k] }), el("dd", { text: `${v.posts} posts · ${v.views.toLocaleString()} views` })]),
+      el("dt", { text: "Scheduled" }), el("dd", { text: r.queue.clips ? `${r.queue.clips} clips until ${new Date(r.queue.until * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : "queue empty" }),
+      el("dt", { text: "Waiting for you" }), el("dd", {}, r.review_waiting ? el("a", { href: "#review", text: `${r.review_waiting} to review` }) : "none"))),
+    r.ig_insights ? null : el("p", { class: "hint", text: "Instagram views need the 'instagram_business_manage_insights' permission on your Meta app (until then: likes and comments). TikTok and YouTube views: type them in below." }))
+  if (!r.clips.length) { view.append(el("div", { class: "empty" }, el("b", { text: "📊" }), "No posts in this period yet.")); return }
+  view.append(el("h2", { text: "Clips, most viewed first" }))
+  for (const c of r.clips) {
+    view.append(el("div", { class: "card" },
+      el("div", { class: "row" }, el("b", { class: "grow", text: c.hook }), el("span", { class: "chip accent", text: `👁 ${c.views.toLocaleString()}` })),
+      el("div", { class: "small muted", text: `${c.creator} · ${new Date(c.posted_at * 1000).toLocaleDateString()} · score ${Math.round(c.score)}` }),
+      el("div", { class: "row wrap", style: { marginTop: "6px", gap: "6px" } }, Object.entries(c.platforms).map(([p, v]) => {
+        const inp = el("input", { type: "number", min: 0, value: v.views || "", placeholder: "views", style: { width: "110px", padding: "4px 8px" } })
+        inp.onchange = async () => { try { await api(`/clips/${c.clip_id}/views`, { method: "PUT", json: { platform: p, views: +inp.value || 0 } }); toast("Saved") } catch (e) { toast(e.message, "bad") } }
+        const auto = p === "instagram" && !v.manual
+        return el("span", { class: "chip", style: { padding: "4px 10px" } }, `${names[p]}: `,
+          auto ? `${(v.views || 0).toLocaleString()} views${v.likes != null ? ` · ❤ ${v.likes}` : ""}${v.comments != null ? ` · 💬 ${v.comments}` : ""}` : inp,
+          v.url ? el("a", { href: v.url, target: "_blank", rel: "noopener", text: " ↗" }) : null)
+      }))))
+  }
+  view.append(el("h2", { text: "By creator" }), el("div", { class: "card" }, el("dl", { class: "kv" },
+    r.creators.flatMap((c) => [el("dt", { text: c.creator }), el("dd", { text: `${c.posts} posts · ${c.views.toLocaleString()} views` })]))))
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Channels
 // ---------------------------------------------------------------------------------------------------------
 async function channelsPage(view) {
@@ -527,7 +567,7 @@ async function morePage(view) {
   pushBtn.onclick = () => enablePush(pushBtn)
   const u = st.usage
   const keys = Object.entries(st.keys).map(([k, v]) => el("span", { class: `chip ${v ? "good" : ""}`, text: `${v ? "✓" : "–"} ${k}` }))
-  view.append(el("h1", { text: "More" }), el("div", { class: "card col" }, pushBtn,
+  view.append(el("h1", { text: "More" }), el("a", { class: "btn", href: "#channels", style: { width: "100%", marginBottom: "12px" }, text: "📡 Watched channels" }), el("div", { class: "card col" }, pushBtn,
     el("p", { class: "hint", style: { margin: 0 }, text: "On iPhone: open this site in Safari → Share → Add to Home Screen, open it from the Home Screen, then tap the button." })))
   const { accounts } = await api("/accounts")
   const names = { instagram: "Instagram Reels", tiktok: "TikTok", youtube: "YouTube Shorts" }
@@ -563,15 +603,25 @@ async function morePage(view) {
   const num = (k, label, hint) => { f[k] = el("input", { type: "number", value: settings[k], inputmode: "numeric" }); return el("label", { class: "field" }, label, f[k], hint ? el("span", { class: "hint", text: hint }) : null) }
   f.music_allowed = el("select", {}, el("option", { value: "none", text: "No music at all (strict)", selected: settings.music_allowed === "none" }), el("option", { value: "faint", text: "Allow faint background music", selected: settings.music_allowed === "faint" }))
   f.hashtags = el("input", { value: settings.hashtags })
+  f.schedule_on = el("input", { type: "checkbox", checked: settings.schedule_on })
+  f.post_times = el("input", { value: settings.post_times, placeholder: "12:00, 18:00, 21:00" })
+  f.reminder_time = el("input", { type: "time", value: settings.reminder_time })
+  f.weekly_summary = el("input", { type: "checkbox", checked: settings.weekly_summary })
   f.caption_template = el("textarea", { value: settings.caption_template })
   f.keyword_blocklist = el("textarea", { value: settings.keyword_blocklist })
   const save = el("button", { class: "btn primary", type: "button", text: "Save settings" })
   save.onclick = () => busy(save, async () => {
     const body = {}
-    for (const [k, inp] of Object.entries(f)) body[k] = inp.type === "number" ? +inp.value : inp.value
+    for (const [k, inp] of Object.entries(f)) body[k] = inp.type === "number" ? +inp.value : inp.type === "checkbox" ? inp.checked : inp.value
     await api("/settings", { method: "PUT", json: body }); toast("Saved")
   }).catch(() => {})
   view.append(el("h2", { text: "Settings" }), el("div", { class: "card col" },
+    el("b", { text: "Posting schedule" }),
+    el("label", { class: "switch" }, f.schedule_on, "Post approved clips on a schedule (off = right away)"),
+    el("label", { class: "field" }, "Posting times (WIB), one clip per time per platform", f.post_times, el("span", { class: "hint", text: "e.g. 12:00, 18:00, 21:00 = 3 posts a day. Approve a batch and it posts all week." })),
+    el("label", { class: "field" }, "Daily reminder at", f.reminder_time, el("span", { class: "hint", text: "Push when clips wait for review or the queue runs low." })),
+    el("label", { class: "switch" }, f.weekly_summary, "Weekly summary on Monday 09:00"),
+    el("b", { text: "Clips", style: { marginTop: "8px" } }),
     num("clips_per_hour", "Clips per hour of video (max)"), num("min_clip_seconds", "Shortest clip (s)"), num("max_clip_seconds", "Longest clip (s)"),
     num("score_threshold", "Score threshold", "Higher = fewer, better clips. Gemini's 1–10 rating × 8, plus loudness and laughter bonuses."),
     el("label", { class: "field" }, "Music", f.music_allowed, el("span", { class: "hint", text: "Platforms mute or claim clips with music." })),

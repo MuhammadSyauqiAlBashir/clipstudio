@@ -36,6 +36,11 @@ the .jsonl).
 - **Permission "implied"** (added 2026-10-04 at the owner's request): the creator generally welcomes clips but gave no
   written permission (e.g. Indonesian podcasters who see clips as free promotion). The owner accepted that risk after
   being told it isn't permission (first case: Raditya Dika podcast). Keep the choice explicit and recorded per source.
+- **Heavy one-off commands (ffmpeg, video edits, tests on real videos) always run memory-capped:**
+  `systemd-run --user --scope -q -p MemoryMax=500M -p MemorySwapMax=0 -p CPUQuota=100% nice -n 19 ionice -c3 <cmd>`
+  (or `~/work/clipstudio-dev/dev.sh`). On 2026-10-04 an uncapped ffmpeg with several `trim`s of one input buffered raw
+  2.5K frames, filled RAM + swap and froze the whole server (owner rebooted via Biznet at 22:51; all data checked OK).
+  Cut segments with separate `-ss/-to` runs + the concat demuxer instead.
 - Free services only (owner is budget-conscious). Anything billable (paid APIs, server upgrade) needs the owner's OK.
 - Keep Clip Studio **off** Cloudflare Workers AI (the shop's FLUX budget) and Shazam (lyrsync's budget).
 - Gemini: use **only Clip Studio's own project key** (`clipstudio-ai`). One project per app is the owner's rule;
@@ -105,7 +110,9 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
       Then Claude builds Connect YouTube + gives the audit form text → owner submits.
 - [ ] First real source with permission → approve one clip = first automatic Instagram Reel (public!).
 - [ ] (Postponed) Twitch and Kick developer apps.
-- [ ] Channel/campaign list → Channels tab.
+- [ ] Channel/campaign list → Channels tab (in More since 2026-10-04). Campaign shortlist: `~/work/clipstudio-campaigns.md`
+      (Clippo, TryBuzzer, AyoKlip, Whop).
+- [ ] TikTok production review: submitted 2026-10-04 with the edited demo videos; wait for the email.
 - Done 2026-10-04: interview; Groq + YouTube keys; Biznet traffic unlimited; throwaway cookies; review flow tested;
   test data deleted; brand **bashclipeveryday** (clip Gmail bashclip.everyday@gmail.com); Instagram Meta app + token.
 
@@ -125,3 +132,16 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
 - 2026-10-04 — Auto-posting: privacy/terms pages, Instagram Reels auto-post (tested up to a FINISHED container with a
   test pattern; not published), posts table + signed links, Auto-posting card in More, per-clip post status/retry.
   Test data deleted at the owner's request. Twitch/Kick postponed by the owner.
+- 2026-10-04 — TikTok: sandbox app (Login Kit + Content Posting API, video.upload), connect flow + inbox drafts tested
+  (test draft delivered); production draft saved with a placeholder demo video — replace it with the real demo, then
+  Submit. Browse page (YouTube channel uploads, 24 per page, ~3 units/page, name search 100 units). Permission
+  "implied" added. Caption language made explicit. CSP img-src allows i.ytimg.com + yt3.ggpht.com (Caddyfile backup
+  `~/work/Caddyfile.bak-20261004-215602`). First real source: Raditya Dika podcast (implied), 8 clips in review.
+- 2026-10-04 22:35 — Server froze (my uncapped ffmpeg demo edit, see the rule above); rebooted 22:51; all services,
+  PocketBase and Clip Studio DB integrity OK. Demo videos re-cut safely: `~/work/tiktok-demo-1-pc.mp4` (2:35),
+  `~/work/tiktok-demo-2-phone.mp4` (0:18). First Instagram Reel posted automatically 22:24
+  (https://www.instagram.com/reel/DeE8p2qFAzl/); TikTok draft delivered.
+- 2026-10-04 23:15 — Autopilot: posting schedule (default 12:00/18:00/21:00 WIB, one clip per slot per platform; "Post
+  now" overrides), daily reminder (19:00), weekly summary (Mon 09:00), Instagram insights every 6 h (works without an
+  extra permission: first Reel 109 views), Stats tab (manual TikTok/YouTube views), Channels moved under More. DB
+  migration helper (`db.ADDED_COLUMNS`). Owner's daily job = approving. 34 tests pass.

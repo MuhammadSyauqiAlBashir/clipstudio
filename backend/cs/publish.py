@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import logging
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -50,12 +51,43 @@ def autopost_enabled(platform: str) -> bool:
     return bool((db.settings().get("autopost") or {}).get(platform)) and connected(platform)
 
 
+def post_times() -> list[tuple[int, int]]:
+    out = []
+    for part in str(db.settings().get("post_times") or "").replace(";", ",").split(","):
+        try:
+            h, m = (int(x) for x in part.strip().split(":"))
+            if 0 <= h < 24 and 0 <= m < 60:
+                out.append((h, m))
+        except ValueError:
+            continue
+    return sorted(set(out))
+
+
+def next_slot(platform: str, now: float | None = None) -> float:
+    """The earliest posting time (WIB) from the schedule that no queued post of this platform has taken yet."""
+    now = now or time.time()
+    times = post_times()
+    if not db.settings().get("schedule_on") or not times:
+        return 0.0
+    taken = {round(r["not_before"]) for r in db.all(
+        "SELECT not_before FROM posts WHERE platform=? AND status='queued' AND scheduled=1", (platform,))}
+    day = datetime.fromtimestamp(now, config.TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    for d in range(60):
+        for h, m in times:
+            slot = (day + timedelta(days=d)).replace(hour=h, minute=m).timestamp()
+            if slot >= now + 60 and round(slot) not in taken:
+                return slot
+    return 0.0
+
+
 def queue_for(clip_id: int):
-    """Called when an approved clip's final is ready."""
+    """Called when an approved clip's final is ready: one post per platform, in the next free schedule slot."""
     for p in PLATFORMS:
         if autopost_enabled(p):
-            db.execute("INSERT OR IGNORE INTO posts(clip_id, platform, status, created_at, updated_at) "
-                       "VALUES(?,?,?,?,?)", (clip_id, p, "queued", db.now(), db.now()))
+            slot = next_slot(p)
+            db.execute("INSERT OR IGNORE INTO posts(clip_id, platform, status, not_before, scheduled, created_at, "
+                       "updated_at) VALUES(?,?,?,?,?,?,?)", (clip_id, p, "queued", slot, int(slot > 0), db.now(),
+                                                             db.now()))
 
 
 def set_post(pid: int, **kw):
@@ -65,23 +97,28 @@ def set_post(pid: int, **kw):
 
 # ---- Instagram ---------------------------------------------------------------------------------------
 def ig_token() -> str:
-    return (db.kv_get("ig_token", {}) or {}).get("token") or config.IG_ACCESS_TOKEN
+    """The refreshed token in the DB, unless the owner saved a new one in the env file since (e.g. regenerated
+    with more permissions): then that one wins."""
+    t = db.kv_get("ig_token", {}) or {}
+    seed = hashlib.sha256(config.IG_ACCESS_TOKEN.encode()).hexdigest()[:16] if config.IG_ACCESS_TOKEN else ""
+    if seed and t.get("seed") != seed:
+        db.kv_set("ig_token", {"token": config.IG_ACCESS_TOKEN, "seed": seed, "refreshed": 0})
+        return config.IG_ACCESS_TOKEN
+    return t.get("token") or config.IG_ACCESS_TOKEN
 
 
 async def ig_refresh(force: bool = False):
     """Long-lived tokens last 60 days; refresh about once a day (allowed once the token is 24 h old)."""
+    tok = ig_token()  # first: it may replace the stored token with a newly saved one
     t = db.kv_get("ig_token", {}) or {}
-    if not force and t.get("refreshed", 0) > time.time() - 86400:
-        return
-    tok = ig_token()
-    if not tok:
+    if not tok or (not force and t.get("refreshed", 0) > time.time() - 86400):
         return
     async with httpx.AsyncClient(timeout=30) as http:
         r = await http.get("https://graph.instagram.com/refresh_access_token",
                            params={"grant_type": "ig_refresh_token", "access_token": tok})
     if r.status_code == 200 and r.json().get("access_token"):
         d = r.json()
-        db.kv_set("ig_token", {"token": d["access_token"], "refreshed": time.time(),
+        db.kv_set("ig_token", {**t, "token": d["access_token"], "refreshed": time.time(),
                                "expires": time.time() + float(d.get("expires_in", 0))})
     else:
         db.kv_set("ig_token", {**t, "token": tok, "refreshed": time.time() - 86400 + 3 * 3600,
