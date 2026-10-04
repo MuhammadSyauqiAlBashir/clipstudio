@@ -11,7 +11,9 @@ PLATFORM_TAGS = {"tiktok": "", "youtube": " #shorts", "instagram": " #reels"}
 
 def post_caption(c: dict, src: dict, platform: str = "tiktok") -> str:
     st = db.settings()
-    tags = " ".join(dict.fromkeys((c["hashtags"] + " " + st["hashtags"] + PLATFORM_TAGS.get(platform, "")).split()))
+    from .campaigns import hashtags_for_source  # required campaign hashtags go first and are never dropped
+    required = " ".join(hashtags_for_source(src))
+    tags = " ".join(dict.fromkeys((required + " " + c["hashtags"] + " " + st["hashtags"] + PLATFORM_TAGS.get(platform, "")).split()))
     indonesian = (src.get("language") or "").lower().startswith(("indonesian", "id"))
     creator = src.get("creator") or ("kreator aslinya" if indonesian else "the original creator")
     m = re.search(r"youtube\.com/@([\w.\-]+)|(?:twitch\.tv|kick\.com)/(\w+)", src.get("creator_url") or "")

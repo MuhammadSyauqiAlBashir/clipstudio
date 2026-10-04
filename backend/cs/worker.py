@@ -8,7 +8,7 @@ import logging
 import signal
 import time
 
-from . import autopilot, config, db, fetch, groq, media, pipeline, publish, twitch, watch, yt
+from . import autopilot, campaigns, config, db, fetch, groq, media, pipeline, publish, twitch, watch, yt
 from . import kick as kick_mod
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -121,6 +121,7 @@ async def watch_loop():
         await every("reminder", 120, autopilot.daily_reminder)
         await every("weekly", 300, autopilot.weekly_summary)
         await every("ig_stats", 6 * 3600, autopilot.instagram_stats)
+        await every("campaigns", 3 * 3600, campaigns.refresh)
         try:
             await asyncio.wait_for(stop.wait(), timeout=5)
         except asyncio.TimeoutError:

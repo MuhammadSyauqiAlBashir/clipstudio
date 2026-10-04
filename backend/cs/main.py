@@ -22,7 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from . import config, db, fetch, gate, kick, pipeline, publish, push, tiktok, twitch, yt
+from . import campaigns, config, db, fetch, gate, kick, pipeline, publish, push, tiktok, twitch, yt
 from .posttext import PLATFORM_TAGS, post_caption
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -199,7 +199,7 @@ async def health():
 # ---------------------------------------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------------------------------------
-SOURCE_FIELDS = ("id, channel_id, platform, url, video_id, kind, title, creator, creator_url, duration, permission, "
+SOURCE_FIELDS = ("id, channel_id, campaign_id, platform, url, video_id, kind, title, creator, creator_url, duration, permission, "
                  "proof, status, step, progress, reason, language, size, files_deleted, created_at, updated_at, added_by")
 
 
@@ -222,6 +222,7 @@ class SourceIn(BaseModel):
     permission: str
     proof: str = Field("", max_length=500)
     creator: str = Field("", max_length=120)
+    campaign_id: int | None = None
 
 
 @app.post("/api/sources")
@@ -237,7 +238,10 @@ async def add_source(body: SourceIn, s: Session = Depends(current)):
     vid = yt.video_id_of(url) if fetch.platform_of(url) == "youtube" else ""
     if vid and db.one("SELECT 1 FROM sources WHERE video_id=? AND status NOT IN ('failed','rejected_by_gate')", (vid,)):
         raise HTTPException(409, "This video is already in your sources.")
-    sid = db.insert("sources", {"platform": fetch.platform_of(url), "url": url, "kind": "manual", "video_id": vid,
+    if body.campaign_id and not db.one("SELECT 1 FROM campaigns WHERE id=?", (body.campaign_id,)):
+        raise HTTPException(400, "Unknown campaign.")
+    sid = db.insert("sources", {"campaign_id": body.campaign_id, "platform": fetch.platform_of(url), "url": url,
+                                "kind": "manual", "video_id": vid,
                                 "permission": body.permission, "proof": body.proof.strip(), "creator": body.creator.strip(),
                                 "status": "queued", "created_at": now, "updated_at": now, "added_by": s.username})
     db.enqueue("process", source_id=sid, priority=20)
@@ -246,7 +250,7 @@ async def add_source(body: SourceIn, s: Session = Depends(current)):
 
 @app.put("/api/uploads")
 async def upload(request: Request, name: str, permission: str, title: str = "", creator: str = "", proof: str = "",
-                 s: Session = Depends(current)):
+                 campaign_id: int = 0, s: Session = Depends(current)):
     """Campaign footage: the file is streamed straight to disk (never held in memory)."""
     if permission not in gate.PERMISSIONS or permission == "blocked":
         raise HTTPException(400, "Choose the permission you have for this file.")
@@ -257,7 +261,8 @@ async def upload(request: Request, name: str, permission: str, title: str = "", 
     if pipeline.free_gb() - size / 1e9 < config.MIN_FREE_DISK_GB:
         raise HTTPException(507, "Not enough free disk space for this file.")
     now = db.now()
-    sid = db.insert("sources", {"platform": "upload", "url": "", "kind": "upload", "title": (title or Path(name).stem)[:300],
+    sid = db.insert("sources", {"campaign_id": campaign_id or None, "platform": "upload", "url": "", "kind": "upload",
+                                "title": (title or Path(name).stem)[:300],
                                 "creator": creator.strip()[:120], "permission": permission, "proof": proof[:500],
                                 "status": "uploading", "created_at": now, "updated_at": now, "added_by": s.username})
     wd = pipeline.work_dir(sid)
@@ -530,6 +535,118 @@ async def stats(days: int = 30, s: Session = Depends(current)):
             "queue": {"clips": queued["n"] or 0, "until": queued["last"] or 0},
             "review_waiting": db.one("SELECT COUNT(*) n FROM clips WHERE status='review'")["n"],
             "ig_insights": not (db.kv_get("ig_insights_error") or "")}
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Campaigns (public catalogue; joining happens in the platform's own app)
+# ---------------------------------------------------------------------------------------------------------
+def campaign_out(r: dict) -> dict:
+    srcs = db.all("SELECT id FROM sources WHERE campaign_id=?", (r["id"],))
+    ids = [x["id"] for x in srcs]
+    to_submit = 0
+    clips_n = 0
+    if ids:
+        marks = ",".join("?" for _ in ids)
+        for c in db.all(f"SELECT posted, submitted, status FROM clips WHERE source_id IN ({marks})", ids):
+            clips_n += c["status"] not in ("candidate", "excluded")
+            posted, sub = db.jload(c["posted"], {}) or {}, db.jload(c["submitted"], {}) or {}
+            to_submit += sum(1 for p, u in posted.items() if str(u).startswith("http") and p not in sub)
+    return {**{k: r[k] for k in ("id", "platform", "ext_id", "title", "creator", "rate", "budget_used", "clippers",
+                                 "brief", "image", "url", "status", "joined", "hidden", "notes", "first_seen")},
+            "platforms": db.jload(r["platforms"], []), "hashtags": db.jload(r["hashtags"], []),
+            "footage": db.jload(r["footage"], []), "flags": db.jload(r["flags"], []), "info": db.jload(r["info"], {}),
+            "sources": len(ids), "clips": clips_n, "to_submit": to_submit}
+
+
+@app.get("/api/campaigns")
+async def list_campaigns(show: str = "open", s: Session = Depends(current)):
+    where = {"open": "status='open' AND hidden=0", "joined": "joined=1", "ended": "status='ended'",
+             "hidden": "hidden=1", "all": "1=1"}.get(show, "status='open' AND hidden=0")
+    rows = db.all(f"SELECT * FROM campaigns WHERE {where} ORDER BY joined DESC, (status='open') DESC, rate DESC, "
+                  "budget_used ASC")
+    return {"campaigns": [campaign_out(r) for r in rows], "refreshed": db.kv_get("campaigns_refreshed", 0) or 0}
+
+
+@app.post("/api/campaigns/refresh")
+async def refresh_campaigns(s: Session = Depends(current)):
+    try:
+        new = await campaigns.refresh(notify=False)
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Clippo didn't answer: {e}") from e
+    return {"new": new}
+
+
+def get_campaign(cid: int) -> dict:
+    r = db.one("SELECT * FROM campaigns WHERE id=?", (cid,))
+    if not r:
+        raise HTTPException(404, "Campaign not found.")
+    return r
+
+
+class CampaignEdit(BaseModel):
+    joined: bool | None = None
+    hidden: bool | None = None
+    notes: str | None = Field(None, max_length=1000)
+
+
+@app.patch("/api/campaigns/{cid}")
+async def edit_campaign(cid: int, body: CampaignEdit, s: Session = Depends(current)):
+    get_campaign(cid)
+    data = {k: (int(v) if isinstance(v, bool) else v) for k, v in body.model_dump().items() if v is not None}
+    db.update("campaigns", cid, data)
+    return {"campaign": campaign_out(get_campaign(cid))}
+
+
+@app.post("/api/campaigns/{cid}/clip")
+async def clip_campaign(cid: int, s: Session = Depends(current)):
+    """Add the campaign's YouTube footage as sources (permission 'campaign', its hashtags go into the captions)."""
+    r = get_campaign(cid)
+    c = {"footage": db.jload(r["footage"], [])}
+    added, skipped = [], []
+    now = db.now()
+    for url in campaigns.youtube_footage(c):
+        vid = yt.video_id_of(url)
+        if vid and db.one("SELECT 1 FROM sources WHERE video_id=? AND status NOT IN ('failed','rejected_by_gate')", (vid,)):
+            skipped.append(url)
+            continue
+        sid = db.insert("sources", {"campaign_id": cid, "platform": "youtube", "url": url, "video_id": vid,
+                                    "kind": "manual", "permission": "campaign",
+                                    "proof": f"{r['platform'].title()} campaign: {r['url']}", "creator": r["creator"],
+                                    "status": "queued", "created_at": now, "updated_at": now, "added_by": s.username})
+        db.enqueue("process", source_id=sid, priority=20)
+        added.append(url)
+    other = [f for f in c["footage"] if f["url"] not in campaigns.youtube_footage(c)]
+    return {"added": added, "skipped": skipped, "manual": other}
+
+
+@app.get("/api/campaigns/{cid}/submit")
+async def campaign_submit_list(cid: int, s: Session = Depends(current)):
+    get_campaign(cid)
+    out = []
+    for c in db.all("SELECT c.id, c.hook, c.posted, c.submitted FROM clips c JOIN sources src ON src.id=c.source_id "
+                    "WHERE src.campaign_id=? ORDER BY c.updated_at DESC", (cid,)):
+        posted, sub = db.jload(c["posted"], {}) or {}, db.jload(c["submitted"], {}) or {}
+        for p, u in posted.items():
+            if str(u).startswith("http"):
+                out.append({"clip_id": c["id"], "hook": c["hook"], "platform": p, "url": u, "submitted": sub.get(p, 0)})
+    return {"items": out}
+
+
+class SubmittedIn(BaseModel):
+    items: list[dict] = Field(max_length=200)  # [{"clip_id": 1, "platform": "instagram"}]
+
+
+@app.post("/api/campaigns/{cid}/submitted")
+async def campaign_submitted(cid: int, body: SubmittedIn, s: Session = Depends(current)):
+    get_campaign(cid)
+    for it in body.items:
+        c = db.one("SELECT c.id, c.submitted FROM clips c JOIN sources src ON src.id=c.source_id "
+                   "WHERE c.id=? AND src.campaign_id=?", (int(it.get("clip_id", 0)), cid))
+        if c and it.get("platform") in publish.PLATFORMS:
+            sub = db.jload(c["submitted"], {}) or {}
+            sub[it["platform"]] = time.time()
+            db.update("clips", c["id"], {"submitted": db.jdump(sub)})
+    return {"ok": True}
 
 
 class PublishIn(BaseModel):
