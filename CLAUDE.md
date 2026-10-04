@@ -110,7 +110,9 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
       Then Claude builds Connect YouTube + gives the audit form text → owner submits.
 - [ ] First real source with permission → approve one clip = first automatic Instagram Reel (public!).
 - [ ] (Postponed) Twitch and Kick developer apps.
-- [ ] Channel/campaign list → Channels tab.
+- [ ] Channel/campaign list → Channels tab (in More since 2026-10-04). Campaign shortlist: `~/work/clipstudio-campaigns.md`
+      (Clippo, TryBuzzer, AyoKlip, Whop).
+- [ ] TikTok production review: submitted 2026-10-04 with the edited demo videos; wait for the email.
 - Done 2026-10-04: interview; Groq + YouTube keys; Biznet traffic unlimited; throwaway cookies; review flow tested;
   test data deleted; brand **bashclipeveryday** (clip Gmail bashclip.everyday@gmail.com); Instagram Meta app + token.
 
@@ -139,3 +141,7 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   PocketBase and Clip Studio DB integrity OK. Demo videos re-cut safely: `~/work/tiktok-demo-1-pc.mp4` (2:35),
   `~/work/tiktok-demo-2-phone.mp4` (0:18). First Instagram Reel posted automatically 22:24
   (https://www.instagram.com/reel/DeE8p2qFAzl/); TikTok draft delivered.
+- 2026-10-04 23:15 — Autopilot: posting schedule (default 12:00/18:00/21:00 WIB, one clip per slot per platform; "Post
+  now" overrides), daily reminder (19:00), weekly summary (Mon 09:00), Instagram insights every 6 h (works without an
+  extra permission: first Reel 109 views), Stats tab (manual TikTok/YouTube views), Channels moved under More. DB
+  migration helper (`db.ADDED_COLUMNS`). Owner's daily job = approving. 34 tests pass.
