@@ -25,7 +25,7 @@ setAuthHandler(() => { me = null; render() })
 // ---------------------------------------------------------------------------------------------------------
 // Shell
 // ---------------------------------------------------------------------------------------------------------
-const TABS = [["review", "🎬", "Review"], ["ready", "✅", "Ready"], ["sources", "➕", "Sources"], ["channels", "📡", "Channels"], ["more", "⚙️", "More"]]
+const TABS = [["review", "🎬", "Review"], ["ready", "✅", "Ready"], ["sources", "➕", "Sources"], ["browse", "🔎", "Browse"], ["channels", "📡", "Channels"], ["more", "⚙️", "More"]]
 
 function drawTabs(active, counts = {}) {
   tabs.hidden = false
@@ -60,6 +60,7 @@ async function render() {
     else if (page === "sources") await sourcesPage(view)
     else if (page === "source") await sourcePage(view, +arg)
     else if (page === "channels") await channelsPage(view)
+    else if (page === "browse") await browsePage(view)
     else if (page === "more") await morePage(view)
     else if (page === "clip") { await readyPage(view); openClip(+arg) }
     else { location.hash = "review"; return }
@@ -369,6 +370,82 @@ async function sourcePage(view, id) {
       el("b", { text: `${mmss(c.start)}–${mmss(c.end)} · ${c.hook}` }), el("div", { class: "muted", text: c.note })))))
   }
   if (["queued", "downloading", "transcribing", "scoring", "rendering", "recording"].includes(s.status)) autoRefresh(6000)
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Browse: find a YouTube channel and pick videos from its uploads
+// ---------------------------------------------------------------------------------------------------------
+const nf = new Intl.NumberFormat("en", { notation: "compact" })
+const bstate = { q: sessionStorage.getItem("browseQ") || "", channel: sessionStorage.getItem("browseCh") || "", page: "", stack: [], hideShorts: sessionStorage.getItem("hideShorts") !== "0" }
+
+function clipThisSheet(v, ch, watched, onDone) {
+  const { body, close } = sheet("Make clips from this video")
+  const last = (JSON.parse(localStorage.getItem("permByChannel") || "{}"))[ch.id] || {}
+  const perm = permSelect((watched && watched.permission !== "blocked" && watched.permission) || last.permission || "")
+  const proof = el("input", { value: last.proof || "", placeholder: "Proof: link or note" })
+  const go = el("button", { class: "btn primary", type: "button", text: "Make clips" })
+  go.onclick = () => busy(go, async () => {
+    if (!perm.value) throw new Error("Choose your permission first.")
+    await api("/sources", { method: "POST", json: { url: v.url, permission: perm.value, proof: proof.value, creator: ch.title } })
+    try { const m = JSON.parse(localStorage.getItem("permByChannel") || "{}"); m[ch.id] = { permission: perm.value, proof: proof.value }; localStorage.setItem("permByChannel", JSON.stringify(m)) } catch (_) {}
+    close(); toast("Added — clips in about 10 minutes"); onDone()
+  }).catch(() => {})
+  body.append(el("img", { src: v.thumb, alt: "", style: { width: "100%", borderRadius: "12px", aspectRatio: "16/9", objectFit: "cover" } }),
+    el("b", { text: v.title }), el("div", { class: "small muted", style: { margin: "4px 0 12px" }, text: `${ch.title} · ${mmss(v.duration)} · ${nf.format(v.views)} views` }),
+    el("div", { class: "col" }, perm, proof, el("p", { class: "hint", style: { margin: 0 }, text: "Your choice is remembered for this channel." }), go))
+}
+
+async function browsePage(view) {
+  const q = el("input", { value: bstate.q, placeholder: "@handle, channel link, video link or name", autocapitalize: "none" })
+  const find = el("button", { class: "btn primary", type: "submit", text: "Find" })
+  const form = el("form", { class: "row" }, q, find)
+  form.onsubmit = (e) => { e.preventDefault(); bstate.q = q.value.trim(); bstate.channel = ""; bstate.page = ""; bstate.stack = []; sessionStorage.setItem("browseQ", bstate.q); sessionStorage.removeItem("browseCh"); render() }
+  view.append(el("h1", { text: "Browse YouTube" }), el("div", { class: "card col" }, form,
+    el("p", { class: "hint", style: { margin: 0 }, text: "Each page costs ~3 of 10,000 free YouTube units a day; a name search costs 100." })))
+  if (!bstate.q && !bstate.channel) return
+  const params = new URLSearchParams(bstate.channel ? { channel: bstate.channel, page: bstate.page } : { q: bstate.q })
+  const r = await api(`/browse/youtube?${params}`)
+  if (r.choices) {
+    if (!r.choices.length) { view.append(el("div", { class: "empty" }, el("b", { text: "🤷" }), "No channel found.")); return }
+    view.append(el("h2", { text: "Which channel?" }), r.choices.map((c) => el("div", { class: "card row", style: { cursor: "pointer" }, onclick: () => { bstate.channel = c.id; sessionStorage.setItem("browseCh", c.id); render() } },
+      el("img", { src: c.thumb, alt: "", style: { width: "48px", height: "48px", borderRadius: "50%" } }),
+      el("div", { class: "grow" }, el("b", { text: c.title }), el("div", { class: "small muted ellipsis", text: c.description })))))
+    return
+  }
+  const ch = r.channel
+  bstate.channel = ch.id
+  sessionStorage.setItem("browseCh", ch.id)
+  const hide = el("input", { type: "checkbox", checked: bstate.hideShorts })
+  hide.onchange = () => { bstate.hideShorts = hide.checked; sessionStorage.setItem("hideShorts", hide.checked ? "1" : "0"); render() }
+  view.append(el("div", { class: "card row" },
+    el("img", { src: ch.thumb, alt: "", style: { width: "56px", height: "56px", borderRadius: "50%" } }),
+    el("div", { class: "grow" }, el("b", { text: ch.title }), el("div", { class: "small muted", text: `${ch.handle ? "@" + ch.handle + " · " : ""}${nf.format(ch.subscribers)} subscribers · ${nf.format(ch.video_count)} videos` }),
+      r.watched ? el("span", { class: "chip good", text: `📡 watched (${r.watched.permission})` }) : null),
+    el("a", { class: "btn sm", href: ch.url, target: "_blank", rel: "noopener", text: "Open" })),
+    el("label", { class: "switch", style: { margin: "4px 0 10px" } }, hide, "Hide Shorts and videos under 3 minutes"))
+  const vids = r.videos.filter((v) => !(bstate.hideShorts && v.duration < 180))
+  if (!vids.length) view.append(el("div", { class: "empty" }, "No long videos on this page."))
+  for (const v of vids) {
+    const live = v.state === "live" ? "🔴 LIVE" : v.state === "upcoming" ? "⏰ upcoming" : ""
+    const action = v.added
+      ? el("a", { class: "btn sm", href: `#source/${v.added.id}`, text: `✓ Added · ${(STATUS[v.added.status] || [v.added.status])[0]}` })
+      : live ? el("span", { class: "chip", text: live })
+        : el("button", { class: "btn sm primary", type: "button", text: "✂️ Clip this", onclick: () => clipThisSheet(v, ch, r.watched, render) })
+    view.append(el("div", { class: "card", style: { display: "grid", gridTemplateColumns: "140px 1fr", gap: "12px", padding: "10px" } },
+      el("a", { href: v.url, target: "_blank", rel: "noopener", style: { position: "relative", display: "block" } },
+        el("img", { src: v.thumb, alt: "", loading: "lazy", style: { width: "140px", aspectRatio: "16/9", objectFit: "cover", borderRadius: "8px", display: "block" } }),
+        el("span", { class: "chip", style: { position: "absolute", right: "4px", bottom: "4px", background: "rgba(0,0,0,.75)", color: "#fff" }, text: mmss(v.duration) })),
+      el("div", { class: "col", style: { gap: "4px", minWidth: 0 } },
+        el("b", { style: { fontSize: "14px", lineHeight: 1.3 }, text: v.title }),
+        el("div", { class: "small muted", text: `${new Date(v.published).toLocaleDateString()} · ${nf.format(v.views)} views` }),
+        el("div", {}, action))))
+  }
+  const prev = el("button", { class: "btn", type: "button", text: "← Newer", disabled: !bstate.stack.length })
+  prev.onclick = () => { bstate.page = bstate.stack.pop() || ""; render(); scrollTo(0, 0) }
+  const next = el("button", { class: "btn", type: "button", text: "Older →", disabled: !r.next })
+  next.onclick = () => { bstate.stack.push(bstate.page); bstate.page = r.next; render(); scrollTo(0, 0) }
+  view.append(el("div", { class: "row", style: { justifyContent: "space-between", marginTop: "8px" } }, prev,
+    el("span", { class: "small muted", text: `Page ${bstate.stack.length + 1}${r.total ? ` of ${Math.ceil(r.total / 24)}` : ""}` }), next))
 }
 
 // ---------------------------------------------------------------------------------------------------------

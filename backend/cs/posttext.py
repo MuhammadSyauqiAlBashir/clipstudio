@@ -12,7 +12,8 @@ PLATFORM_TAGS = {"tiktok": "", "youtube": " #shorts", "instagram": " #reels"}
 def post_caption(c: dict, src: dict, platform: str = "tiktok") -> str:
     st = db.settings()
     tags = " ".join(dict.fromkeys((c["hashtags"] + " " + st["hashtags"] + PLATFORM_TAGS.get(platform, "")).split()))
-    creator = src.get("creator") or "the original creator"
+    indonesian = (src.get("language") or "").lower().startswith(("indonesian", "id"))
+    creator = src.get("creator") or ("kreator aslinya" if indonesian else "the original creator")
     m = re.search(r"youtube\.com/@([\w.\-]+)|(?:twitch\.tv|kick\.com)/(\w+)", src.get("creator_url") or "")
     if m:
         creator = f"@{m.group(1) or m.group(2)}"

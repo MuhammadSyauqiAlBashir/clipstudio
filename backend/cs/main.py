@@ -233,7 +233,10 @@ async def add_source(body: SourceIn, s: Session = Depends(current)):
     if pipeline.free_gb() < config.MIN_FREE_DISK_GB:
         raise HTTPException(507, "Not enough free disk space right now.")
     now = db.now()
-    sid = db.insert("sources", {"platform": fetch.platform_of(url), "url": url, "kind": "manual",
+    vid = yt.video_id_of(url) if fetch.platform_of(url) == "youtube" else ""
+    if vid and db.one("SELECT 1 FROM sources WHERE video_id=? AND status NOT IN ('failed','rejected_by_gate')", (vid,)):
+        raise HTTPException(409, "This video is already in your sources.")
+    sid = db.insert("sources", {"platform": fetch.platform_of(url), "url": url, "kind": "manual", "video_id": vid,
                                 "permission": body.permission, "proof": body.proof.strip(), "creator": body.creator.strip(),
                                 "status": "queued", "created_at": now, "updated_at": now, "added_by": s.username})
     db.enqueue("process", source_id=sid, priority=20)
@@ -279,6 +282,32 @@ async def upload(request: Request, name: str, permission: str, title: str = "", 
     db.update("sources", sid, {"file": str(dst), "size": written, "status": "queued", "updated_at": db.now()})
     db.enqueue("process", source_id=sid, priority=20)
     return {"source": source_out(db.one(f"SELECT {SOURCE_FIELDS} FROM sources WHERE id=?", (sid,)))}
+
+
+@app.get("/api/browse/youtube")
+async def browse_youtube(q: str = "", channel: str = "", page: str = "", s: Session = Depends(current)):
+    """Search a YouTube channel (handle / link / video link / name) and list its uploads, page by page."""
+    try:
+        if not channel:
+            channel, choices = await yt.find_channels(q)
+            if not channel:
+                return {"choices": choices}
+        res = await yt.uploads_page(channel, page)
+    except yt.YTError as e:
+        raise HTTPException(400, str(e)) from e
+    ids = [v["id"] for v in res["videos"]]
+    added = {}
+    if ids:
+        marks = ",".join("?" for _ in ids)
+        for r in db.all(f"SELECT video_id, id, status FROM sources WHERE video_id IN ({marks})", ids):
+            added[r["video_id"]] = {"id": r["id"], "status": r["status"]}
+    watched = db.one("SELECT id, permission FROM channels WHERE platform='youtube' AND ext_id=?", (channel,))
+    for v in res["videos"]:
+        v["added"] = added.get(v["id"])
+        v["url"] = f"https://www.youtube.com/watch?v={v['id']}"
+    ch = {k: v for k, v in res["channel"].items() if k not in ("uploads", "at")}
+    return {"channel": ch, "videos": res["videos"], "next": res["next"], "prev": res["prev"], "total": res["total"],
+            "watched": watched}
 
 
 def get_source(sid: int) -> dict:

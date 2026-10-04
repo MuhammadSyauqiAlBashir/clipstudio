@@ -185,7 +185,8 @@ SCHEMA = {
         "hook": {"type": "STRING", "description": "on-screen hook title, max 7 words, same language as the speech, "
                                                   "honest (no fake claims), no emojis, no hashtags"},
         "caption": {"type": "STRING", "description": "one-sentence post caption in the same language"},
-        "hashtags": {"type": "STRING", "description": "3-4 relevant hashtags separated by spaces, each starting with #"},
+        "hashtags": {"type": "STRING", "description": "3-4 relevant hashtags separated by spaces, each starting with #, "
+                                                      "in the speech's language where natural"},
     })}},
     "required": ["moments"], "propertyOrdering": ["moments"],
 }
@@ -242,7 +243,10 @@ async def pick(transcript: dict, duration: float, settings: dict, title: str = "
     for lo, hi in windows(words):
         span_min = (words[hi]["end"] - words[lo]["start"]) / 60
         want = max(2, math.ceil(span_min / 60 * float(settings["clips_per_hour"]) * 2))
-        prompt = (f"Video title: {title or '(unknown)'}\nLanguage: {transcript.get('language') or 'auto'}\n"
+        lang = (transcript.get("language") or "").strip().title() or "the same language as the speech"
+        prompt = (f"Video title: {title or '(unknown)'}\nSpoken language: {lang}\n"
+                  f"Write every hook, caption and hashtag in {lang} (the language people speak in the video), "
+                  f"in the casual style a local viewer uses — never translate them into another language.\n"
                   f"Find up to {want} moments, each {int(min_s)}-{int(max_s)} seconds long. Fewer is fine if the "
                   f"material is weak; return an empty list if nothing is good.\n\nTranscript:\n"
                   + "\n".join(transcript_lines(words, segments, lo, hi)))
