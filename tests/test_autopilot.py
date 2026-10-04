@@ -129,3 +129,21 @@ def test_new_env_token_replaces_refreshed_copy(monkeypatch):
     assert publish.ig_token() == "refreshed-new"        # later refreshes are kept
     monkeypatch.setattr(config, "IG_ACCESS_TOKEN", "regenerated")
     assert publish.ig_token() == "regenerated"
+
+
+def test_youtube_visibility_check(state, monkeypatch):
+    from cs import autopilot, db, yt
+    a, b = clip(), clip()
+    now = time.time()
+    for cid, vid in ((a, "pub1"), (b, "lock1")):
+        db.execute("INSERT INTO posts(clip_id,platform,status,remote_id,posted_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                   (cid, "youtube", "done", vid, now - 60, now, now))
+
+    async def fake_videos(ids):
+        return [{"id": "pub1", "views": 42}]
+    monkeypatch.setattr(yt, "videos", fake_videos)
+    asyncio.run(autopilot.youtube_visibility())
+    asyncio.run(autopilot.youtube_visibility())
+    st = {r["remote_id"]: db.jload(r["stats"]) for r in db.all("SELECT remote_id, stats FROM posts")}
+    assert st["pub1"]["public"] == 1 and st["pub1"]["views"] == 42 and st["lock1"]["locked"] == 1
+    assert len([x for x in state if "locked" in x[0]]) == 1  # one push, not one per check

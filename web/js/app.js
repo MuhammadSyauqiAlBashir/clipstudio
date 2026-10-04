@@ -283,7 +283,8 @@ async function openClip(id) {
       el("div", { class: "row" }, el("b", { class: "grow", text: label }), canPost ? pub : null, copy, c.has_final && !(post && post.status === "done" && p !== "tiktok") ? mark : null),
       st ? el("div", { class: "small", style: { marginTop: "4px", color: post.status === "failed" ? "var(--bad)" : "inherit" } }, st,
         post.url ? el("span", {}, " · ", el("a", { href: post.url, target: "_blank", rel: "noopener", text: "open" })) : null,
-        views !== undefined ? ` · 👁 ${views.toLocaleString()} views` : "") : null,
+        views !== undefined ? ` · 👁 ${views.toLocaleString()} views` : "",
+        post.stats && post.stats.locked ? el("div", { style: { color: "var(--bad)" }, text: "🔒 YouTube locked it as private (Google's audit not passed yet) — share it from the phone" }) : null) : null,
       el("pre", { class: "caption", text: c.captions[p] })))
   }
   const edit = el("button", { class: "btn", type: "button", text: "✏️ Edit text" })
