@@ -34,6 +34,8 @@ KICK_CLIENT_SECRET = os.environ.get("KICK_CLIENT_SECRET", "")
 # Auto-posting (owner's own accounts only)
 IG_ACCESS_TOKEN = os.environ.get("IG_ACCESS_TOKEN", "")  # seed; refreshed copies live in the DB
 IG_APP_SECRET = os.environ.get("IG_APP_SECRET", "")
+TIKTOK_CLIENT_KEY = os.environ.get("TIKTOK_CLIENT_KEY", "")  # sandbox keys until TikTok approves the app
+TIKTOK_CLIENT_SECRET = os.environ.get("TIKTOK_CLIENT_SECRET", "")
 # Signs WebSub / EventSub deliveries. If unset, a random one is created in the state dir.
 WEBHOOK_SECRET = os.environ.get("CS_WEBSUB_SECRET", "")
 VAPID_SUBJECT = os.environ.get("CS_VAPID_SUBJECT", "mailto:admin@bashir.my.id")

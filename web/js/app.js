@@ -38,7 +38,13 @@ async function render() {
     try { me = (await api("/me", { quiet: true })).me } catch (_) { me = null }
   }
   if (!me) return loginPage()
-  const [page, arg] = (location.hash.slice(1) || "review").split("/")
+  const [path, query] = (location.hash.slice(1) || "review").split("?")
+  const [page, arg] = path.split("/")
+  const back = new URLSearchParams(query || "").get("tiktok")
+  if (back) {
+    history.replaceState(null, "", "#more")
+    setTimeout(() => toast(back === "connected" ? "TikTok connected ✅" : `TikTok: ${back}`, back === "connected" ? "" : "bad"), 300)
+  }
   const active = { source: "sources", clip: "ready" }[page] || page
   let counts = {}
   try {
@@ -258,12 +264,13 @@ async function openClip(id) {
     }
     const post = (c.posts || {})[p]
     const st = post ? { queued: "⏳ Waiting to post", uploading: "⬆️ Uploading…", processing: "⚙️ Processing on the platform…",
-      done: "✅ Posted automatically", failed: `⚠️ Failed: ${post.error}` }[post.status] : ""
+      done: p === "tiktok" ? "📥 Sent to your TikTok inbox — open TikTok to post it, then tap Mark posted" : "✅ Posted automatically",
+      failed: `⚠️ Failed: ${post.error}` }[post.status] : ""
     const pub = el("button", { class: "btn sm primary", type: "button", text: post && post.status === "failed" ? "Retry" : "Post now" })
     pub.onclick = () => busy(pub, async () => { c = (await api(`/clips/${c.id}/publish`, { method: "POST", json: { platform: p } })).clip; pub.remove(); toast("Posting…") }).catch(() => {})
     const canPost = c.has_final && (!post || post.status === "failed") && !(c.posted || {})[p] && accounts && accounts[p] && accounts[p].connected
     body.append(el("div", { class: "card", style: { marginTop: "10px" } },
-      el("div", { class: "row" }, el("b", { class: "grow", text: label }), canPost ? pub : null, copy, c.has_final && !(post && post.status === "done") ? mark : null),
+      el("div", { class: "row" }, el("b", { class: "grow", text: label }), canPost ? pub : null, copy, c.has_final && !(post && post.status === "done" && p !== "tiktok") ? mark : null),
       st ? el("div", { class: "small", style: { marginTop: "4px", color: post.status === "failed" ? "var(--bad)" : "inherit" } }, st,
         post.url ? el("span", {}, " · ", el("a", { href: post.url, target: "_blank", rel: "noopener", text: "open" })) : null) : null,
       el("pre", { class: "caption", text: c.captions[p] })))
@@ -451,11 +458,18 @@ async function morePage(view) {
     Object.entries(accounts).map(([k, a]) => {
       const t = el("input", { type: "checkbox", checked: a.autopost, disabled: !a.connected })
       t.onchange = async () => { try { await api("/accounts/autopost", { method: "PUT", json: { platform: k, on: t.checked } }); toast(t.checked ? `${names[k]}: auto-post on` : `${names[k]}: auto-post off`) } catch (e) { toast(e.message, "bad") } }
-      return el("div", { class: "row", style: { padding: "6px 0", borderTop: "1px solid var(--line)" } },
+      let action = null
+      if (k === "tiktok" && a.can_connect) {
+        action = a.connected
+          ? el("button", { class: "btn sm", type: "button", text: "Disconnect", onclick: async (e) => { if (!confirm("Disconnect TikTok?")) return; await busy(e.target, () => api("/tiktok/disconnect", { method: "POST" })).catch(() => {}); render() } })
+          : el("a", { class: "btn sm primary", href: "/api/tiktok/connect", text: "Connect TikTok" })
+      }
+      return el("div", { class: "row wrap", style: { padding: "6px 0", borderTop: "1px solid var(--line)" } },
         el("div", { class: "grow" }, el("b", { text: names[k] }),
-          el("div", { class: "small muted", text: a.connected ? `Connected${a.username ? ` as @${a.username}` : ""}${a.expires ? ` · token renews itself` : ""}` : (a.note || "Not connected") }),
+          el("div", { class: "small muted", text: a.connected ? `Connected${a.username ? ` as ${k === "tiktok" ? "" : "@"}${a.username}` : ""}${a.expires ? " · token renews itself" : ""}` : "Not connected" }),
+          el("div", { class: "small muted", text: a.note || "" }),
           a.error ? el("div", { class: "small", style: { color: "var(--bad)" }, text: a.error }) : null),
-        el("label", { class: "switch" }, t))
+        action, el("label", { class: "switch" }, t))
     })))
   view.append(el("h2", { text: "Status" }), el("div", { class: "card" },
     el("dl", { class: "kv" },

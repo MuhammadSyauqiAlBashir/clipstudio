@@ -13,14 +13,15 @@ from collections import OrderedDict, defaultdict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from . import config, db, fetch, gate, kick, pipeline, publish, push, twitch, yt
+from . import config, db, fetch, gate, kick, pipeline, publish, push, tiktok, twitch, yt
 from .posttext import PLATFORM_TAGS, post_caption
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -483,14 +484,44 @@ async def accounts(s: Session = Depends(current)):
                 ig["error"] = str(e)[:200]
     tok = db.kv_get("ig_token", {}) or {}
     ig["expires"] = tok.get("expires", 0)
+    ta = tiktok.auth()
     out = {"instagram": ig,
-           "tiktok": {"connected": publish.connected("tiktok"), "username": "", "error": "",
-                      "note": "Drafts in your TikTok inbox after TikTok approves the app."},
+           "tiktok": {"connected": tiktok.connected(), "username": ta.get("display_name", ""), "error": "",
+                      "can_connect": tiktok.configured(),
+                      "note": "Approved clips go to your TikTok inbox as drafts; you post them in the TikTok app."},
            "youtube": {"connected": publish.connected("youtube"), "username": "", "error": "",
                        "note": "Waiting for Google's audit; until then share from the phone."}}
     for k, v in out.items():
         v["autopost"] = bool(auto.get(k))
     return {"accounts": out}
+
+
+@app.get("/api/tiktok/connect")
+async def tiktok_connect(s: Session = Depends(current)):
+    if not tiktok.configured():
+        raise HTTPException(400, "TikTok keys aren't set up on the server.")
+    return RedirectResponse(tiktok.authorize_url(), status_code=302)
+
+
+@app.get("/api/tiktok/oauth")
+async def tiktok_oauth(code: str = "", state: str = "", error: str = "", error_description: str = ""):
+    """TikTok sends the owner back here after the login. Protected by the single-use state (no session cookie)."""
+    if error or not tiktok.check_state(state):
+        msg = error_description or error or "expired or invalid login link"
+        return RedirectResponse("/#more?tiktok=" + quote(f"failed: {msg}"[:120]), status_code=302)
+    try:
+        await tiktok.finish_login(code)
+    except (tiktok.TikTokError, httpx.HTTPError) as e:
+        return RedirectResponse("/#more?tiktok=" + quote(f"failed: {e}"[:120]), status_code=302)
+    db.event("TikTok connected", "accounts")
+    return RedirectResponse("/#more?tiktok=connected", status_code=302)
+
+
+@app.post("/api/tiktok/disconnect")
+async def tiktok_disconnect(s: Session = Depends(current)):
+    await tiktok.disconnect()
+    db.event("TikTok disconnected", "accounts")
+    return {"ok": True}
 
 
 class AutopostIn(BaseModel):

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config, db
+from . import config, db, tiktok
 from .posttext import post_caption
 
 log = logging.getLogger("cs.publish")
@@ -41,6 +41,8 @@ class Later(Exception):
 def connected(platform: str) -> bool:
     if platform == "instagram":
         return bool(ig_token())
+    if platform == "tiktok":
+        return tiktok.connected()
     return False
 
 
@@ -159,6 +161,23 @@ async def instagram(post: dict, clip: dict, caption: str):
     return media_id, url
 
 
+async def tiktok_draft(post: dict, clip: dict):
+    """Upload to the TikTok inbox, then wait until TikTok has delivered the draft."""
+    if not post["remote_id"]:
+        publish_id = await tiktok.upload_draft(Path(clip["final"]))
+        set_post(post["id"], remote_id=publish_id, status="processing")
+        raise Later(time.time() + 10, "TikTok is processing the video")
+    st, why = await tiktok.status(post["remote_id"])
+    if st in ("SEND_TO_USER_INBOX", "PUBLISH_COMPLETE"):
+        return post["remote_id"], ""
+    if st == "FAILED":
+        set_post(post["id"], remote_id="")
+        raise PublishError(f"TikTok refused the video: {why or 'unknown reason'}")
+    if time.time() - post["updated_at"] > 1800:
+        raise PublishError("TikTok took more than 30 minutes to process the video.")
+    raise Later(time.time() + 15, "TikTok is processing the video")
+
+
 # ---- worker side ---------------------------------------------------------------------------------------
 async def run_one() -> bool:
     """Publish the next due post. True if something was attempted."""
@@ -179,12 +198,14 @@ async def run_one() -> bool:
     try:
         if post["platform"] == "instagram":
             remote, url = await instagram(post, clip, caption)
+        elif post["platform"] == "tiktok":
+            remote, url = await tiktok_draft(post, clip)
         else:
             raise PublishError(f"{post['platform']} posting isn't set up yet")
     except Later as e:
         db.update("posts", post["id"], {"not_before": e.until})  # keeps updated_at = last real change
         return True
-    except (PublishError, httpx.HTTPError, OSError) as e:
+    except (PublishError, tiktok.TikTokError, httpx.HTTPError, OSError) as e:
         attempts = post["attempts"] + 1
         if attempts < 3 and not isinstance(e, PublishError):
             set_post(post["id"], attempts=attempts, not_before=time.time() + 300 * attempts, error=str(e)[:300])
@@ -195,6 +216,12 @@ async def run_one() -> bool:
             await push.send(f"⚠️ {post['platform'].title()} post failed", str(e)[:120], url=f"/#clip/{clip['id']}")
         return True
     set_post(post["id"], status="done", remote_id=remote, url=url, posted_at=time.time(), error="")
+    if post["platform"] == "tiktok":  # a draft in the inbox: the owner posts it (and marks it posted) in the app
+        db.event(f"Clip {clip['id']} sent to the TikTok inbox as a draft", "publish")
+        from . import push
+        await push.send("📥 TikTok draft ready", (clip["hook"] or "Your clip")[:90] + " — open TikTok to post it",
+                        url=f"/#clip/{clip['id']}", tag=f"tt{clip['id']}")
+        return True
     posted = db.jload(clip["posted"], {}) or {}
     posted[post["platform"]] = url or "posted"
     db.update("clips", clip["id"], {"posted": db.jdump(posted), "status": "posted", "updated_at": db.now()})
