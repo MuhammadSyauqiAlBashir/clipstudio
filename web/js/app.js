@@ -10,6 +10,7 @@ const PERMS = [
   ["explicit", "Explicit — the creator said clipping is OK"],
   ["campaign", "Campaign — a clipping campaign gave the footage"],
   ["platform-default", "Platform default — Creative Commons / own content"],
+  ["implied", "Implied — the creator welcomes clips, no written permission"],
 ]
 const STATUS = {
   queued: ["Queued", ""], uploading: ["Uploading", ""], downloading: ["Downloading", "warn"], recording: ["🔴 Recording", "bad"],

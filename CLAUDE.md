@@ -33,6 +33,9 @@ the .jsonl).
   cloudscraper); a blocked Kick source fails with the reason.
 - **YouTube cookies:** only from **one throwaway account**, only when downloads are blocked, never mixed with the
   owner's real accounts. If it gets banned, stop and ask the owner; never create accounts automatically.
+- **Permission "implied"** (added 2026-10-04 at the owner's request): the creator generally welcomes clips but gave no
+  written permission (e.g. Indonesian podcasters who see clips as free promotion). The owner accepted that risk after
+  being told it isn't permission (first case: Raditya Dika podcast). Keep the choice explicit and recorded per source.
 - Free services only (owner is budget-conscious). Anything billable (paid APIs, server upgrade) needs the owner's OK.
 - Keep Clip Studio **off** Cloudflare Workers AI (the shop's FLUX budget) and Shazam (lyrsync's budget).
 - Gemini: use **only Clip Studio's own project key** (`clipstudio-ai`). One project per app is the owner's rule;

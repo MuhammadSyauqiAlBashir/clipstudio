@@ -128,6 +128,8 @@ def test_gate():
     assert gate.check(permission="campaign", title="NBA Finals recap", duration=900, live=False, settings=st)
     assert gate.check(permission="explicit", title="short", duration=30, live=False, settings=st)
     assert gate.check(permission="explicit", title="live now", duration=0, live=True, settings=st) == ""
+    assert gate.check(permission="implied", title="Podcast", duration=3000, live=False, settings=st) == ""
+    assert gate.check(permission="nonsense", title="Podcast", duration=3000, live=False, settings=st)
     assert gate.check(permission="explicit", title="x", duration=200, live=False, settings=st, min_minutes=5)
 
 
