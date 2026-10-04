@@ -150,3 +150,7 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   (Browse inside) · Campaigns · Stats · More; campaign link on sources/uploads/Browse; required hashtags in captions;
   submit-links list. Owner granted `Bash(curl:*)` (project-local) to build automated joining; the safety check still
   blocked reading Clippo's login flow, so joining stays a tap in Clippo. 37 tests pass.
+- 2026-10-05 00:40 — YouTube: owner saved `YT_OAUTH_CLIENT_ID/SECRET` (Google Auth Platform, project clipstudio-ai,
+  scope youtube.upload, redirect `/api/youtube/oauth`). Built Connect YouTube + resumable Shorts upload
+  (`backend/cs/youtube.py`, 1,600 units each, max 5/day, never twice per clip). Auto-post to YouTube stays OFF until
+  Google's audit (uploads are locked private before that). Next: owner connects, one test upload, audit form. 38 tests.

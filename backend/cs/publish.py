@@ -17,7 +17,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config, db, tiktok
+from . import config, db, tiktok, youtube
 from .posttext import post_caption
 
 log = logging.getLogger("cs.publish")
@@ -44,6 +44,8 @@ def connected(platform: str) -> bool:
         return bool(ig_token())
     if platform == "tiktok":
         return tiktok.connected()
+    if platform == "youtube":
+        return youtube.connected()
     return False
 
 
@@ -198,6 +200,18 @@ async def instagram(post: dict, clip: dict, caption: str):
     return media_id, url
 
 
+async def youtube_short(post: dict, clip: dict, caption: str, src: dict):
+    if post["remote_id"]:  # uploaded already (a retry after a crash): never upload twice
+        return post["remote_id"], f"https://www.youtube.com/shorts/{post['remote_id']}"
+    tags = [w for w in caption.split() if w.startswith("#")]
+    lang = {"indonesian": "id", "english": "en"}.get((src.get("language") or "").lower(), "")
+    v = await youtube.upload(Path(clip["final"]), clip["hook"] or src.get("title", ""), caption, tags, lang)
+    set_post(post["id"], remote_id=v["id"])
+    if v["privacy"] == "private":
+        db.event(f"YouTube kept clip {clip['id']} private (Google's audit not passed yet): {v['url']}", "publish", "warn")
+    return v["id"], v["url"]
+
+
 async def tiktok_draft(post: dict, clip: dict):
     """Upload to the TikTok inbox, then wait until TikTok has delivered the draft."""
     if not post["remote_id"]:
@@ -237,12 +251,14 @@ async def run_one() -> bool:
             remote, url = await instagram(post, clip, caption)
         elif post["platform"] == "tiktok":
             remote, url = await tiktok_draft(post, clip)
+        elif post["platform"] == "youtube":
+            remote, url = await youtube_short(post, clip, caption, src)
         else:
             raise PublishError(f"{post['platform']} posting isn't set up yet")
     except Later as e:
         db.update("posts", post["id"], {"not_before": e.until})  # keeps updated_at = last real change
         return True
-    except (PublishError, tiktok.TikTokError, httpx.HTTPError, OSError) as e:
+    except (PublishError, tiktok.TikTokError, youtube.YouTubeError, httpx.HTTPError, OSError) as e:
         attempts = post["attempts"] + 1
         if attempts < 3 and not isinstance(e, PublishError):
             set_post(post["id"], attempts=attempts, not_before=time.time() + 300 * attempts, error=str(e)[:300])

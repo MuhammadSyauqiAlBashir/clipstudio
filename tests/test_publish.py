@@ -166,3 +166,41 @@ def test_tiktok_callback_and_draft(state, monkeypatch):
     p = db.one("SELECT * FROM posts WHERE platform='tiktok'")
     assert p["status"] == "done" and p["remote_id"] == "pub1"
     assert db.one("SELECT status FROM clips WHERE id=?", (cid,))["status"] == "ready"  # a draft isn't "posted"
+
+
+def test_youtube_connect_upload_and_limits(state, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from cs import config, db, main, publish, youtube
+    monkeypatch.setattr(config, "YT_OAUTH_CLIENT_ID", "id.apps.googleusercontent.com")
+    monkeypatch.setattr(config, "YT_OAUTH_CLIENT_SECRET", "sec")
+    url = youtube.authorize_url()
+    assert "youtube.upload" in url and "access_type=offline" in url and "redirect_uri=https%3A%2F%2Fclips" in url
+
+    async def fake_finish(code):
+        db.kv_set("youtube_auth", {"access_token": "a", "refresh_token": "r", "expires": time.time() + 3000})
+    monkeypatch.setattr(youtube, "finish_login", fake_finish)
+    with TestClient(main.app, follow_redirects=False) as c:
+        assert "failed" in c.get("/api/youtube/oauth?code=x&state=bad").headers["location"]
+        st = youtube.authorize_url().split("state=")[1]
+        assert c.get(f"/api/youtube/oauth?code=x&state={st}").headers["location"] == "/#more?youtube=connected"
+    assert youtube.connected() and publish.connected("youtube")
+
+    calls = []
+
+    async def fake_upload(path, title, desc, tags, lang=""):
+        calls.append((title, tags))
+        return {"id": "vid1", "url": "https://www.youtube.com/shorts/vid1", "privacy": "private",
+                "upload_status": "uploaded", "channel": "bashclipeveryday"}
+    monkeypatch.setattr(youtube, "upload", fake_upload)
+    cid = make_clip(state)
+    db.execute("INSERT INTO posts(clip_id, platform, status, created_at, updated_at) VALUES(?,?,?,?,?)",
+               (cid, "youtube", "queued", db.now(), db.now()))
+    assert asyncio.run(publish.run_one())
+    p = db.one("SELECT * FROM posts WHERE platform='youtube'")
+    assert p["status"] == "done" and p["url"].endswith("vid1") and calls[0][0] == "Hook" and "#shorts" in calls[0][1]
+    db.execute("UPDATE posts SET status='queued'")  # a retry never uploads twice
+    asyncio.run(publish.run_one())
+    assert len(calls) == 1
+    db.usage_add("yt_uploads", youtube.DAILY_UPLOADS)
+    assert youtube.uploads_left() == 0

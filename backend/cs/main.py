@@ -22,7 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from . import campaigns, config, db, fetch, gate, kick, pipeline, publish, push, tiktok, twitch, yt
+from . import campaigns, config, db, fetch, gate, kick, pipeline, publish, push, tiktok, twitch, youtube, yt
 from .posttext import PLATFORM_TAGS, post_caption
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -698,8 +698,10 @@ async def accounts(s: Session = Depends(current)):
            "tiktok": {"connected": tiktok.connected(), "username": ta.get("display_name", ""), "error": "",
                       "can_connect": tiktok.configured(),
                       "note": "Approved clips go to your TikTok inbox as drafts; you post them in the TikTok app."},
-           "youtube": {"connected": publish.connected("youtube"), "username": "", "error": "",
-                       "note": "Waiting for Google's audit; until then share from the phone."}}
+           "youtube": {"connected": youtube.connected(), "username": youtube.auth().get("channel", ""), "error": "",
+                       "can_connect": youtube.configured(),
+                       "note": f"Until Google's audit passes, uploads are locked private, so keep auto-post off and "
+                               f"share from the phone. {youtube.uploads_left()} of {youtube.DAILY_UPLOADS} uploads left today."}}
     for k, v in out.items():
         v["autopost"] = bool(auto.get(k))
     return {"accounts": out}
@@ -730,6 +732,34 @@ async def tiktok_oauth(code: str = "", state: str = "", error: str = "", error_d
 async def tiktok_disconnect(s: Session = Depends(current)):
     await tiktok.disconnect()
     db.event("TikTok disconnected", "accounts")
+    return {"ok": True}
+
+
+@app.get("/api/youtube/connect")
+async def youtube_connect(s: Session = Depends(current)):
+    if not youtube.configured():
+        raise HTTPException(400, "YouTube keys aren't set up on the server.")
+    return RedirectResponse(youtube.authorize_url(), status_code=302)
+
+
+@app.get("/api/youtube/oauth")
+async def youtube_oauth(code: str = "", state: str = "", error: str = ""):
+    """Google sends the owner back here after the consent screen (single-use state; no session cookie)."""
+    if error or not youtube.check_state(state):
+        return RedirectResponse("/#more?youtube=" + quote(f"failed: {error or 'expired or invalid login link'}"[:120]),
+                                status_code=302)
+    try:
+        await youtube.finish_login(code)
+    except (youtube.YouTubeError, httpx.HTTPError) as e:
+        return RedirectResponse("/#more?youtube=" + quote(f"failed: {e}"[:120]), status_code=302)
+    db.event("YouTube connected", "accounts")
+    return RedirectResponse("/#more?youtube=connected", status_code=302)
+
+
+@app.post("/api/youtube/disconnect")
+async def youtube_disconnect(s: Session = Depends(current)):
+    await youtube.disconnect()
+    db.event("YouTube disconnected", "accounts")
     return {"ok": True}
 
 
