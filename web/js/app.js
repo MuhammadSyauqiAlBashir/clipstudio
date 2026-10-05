@@ -221,7 +221,7 @@ function setClosed(page, sid, closed) {
   } catch (_) {}
 }
 
-function groupBox(page, sid, clips, cardFn, tools = []) {
+function groupBox(page, sid, clips, cardFn, tools = [], { pause: withPause = true } = {}) {
   const src = clips[0].source
   const box = el("div", { class: `group${isClosed(page, sid) ? " closed" : ""}` })
   const head = el("button", { class: "group-head", type: "button", "aria-expanded": isClosed(page, sid) ? "false" : "true" },
@@ -231,7 +231,8 @@ function groupBox(page, sid, clips, cardFn, tools = []) {
   head.onclick = () => { box.classList.toggle("closed"); const c = box.classList.contains("closed"); setClosed(page, sid, c); head.setAttribute("aria-expanded", c ? "false" : "true") }
   const pause = el("button", { class: "btn sm", type: "button" }, svgIcon(src.paused ? "play" : "pause"), src.paused ? "Resume this video" : "Pause this video")
   pause.onclick = () => busy(pause, async () => { await api(`/sources/${sid}/pause`, { method: "PUT", json: { paused: !src.paused } }); toast(src.paused ? "Resumed" : "Paused — nothing new starts for this video"); render() }).catch(() => {})
-  box.append(head, el("div", { class: "group-body" }, el("div", { class: "group-tools" }, ...tools, pause), clips.map(cardFn)))
+  const toolRow = withPause || tools.length ? el("div", { class: "group-tools" }, ...tools, withPause ? pause : null) : null
+  box.append(head, el("div", { class: "group-body" }, toolRow, clips.map(cardFn)))
   return box
 }
 
@@ -372,13 +373,15 @@ function readyCard(c) {
 
 async function readyPage(view) {
   const filter = sessionStorage.getItem("readyFilter") || "approved"
-  const { clips } = await api(`/clips?status=${filter}${filter === "approved" ? "&order=source" : ""}`)
+  const grouped = filter === "approved" || filter === "posted"
+  const { clips } = await api(`/clips?status=${filter}${grouped ? "&order=source" : ""}`)
   view.append(el("h1", { text: "Ready to post" }), filter === "approved" ? await queuePanel("posting") : null,
     el("div", { class: "seg" }, [["approved", "To post"], ["posted", "Posted"], ["rejected", "Rejected"]].map(([k, l]) =>
       el("button", { class: `btn sm ${k === filter ? "on" : ""}`, type: "button", text: l, onclick: () => { sessionStorage.setItem("readyFilter", k); render() } }))))
   if (!clips.length) { view.append(el("div", { class: "empty" }, el("b", { text: "📭" }), "Nothing here yet.")); return }
   const busyNow = clips.some((c) => c.status === "approved" || c.status === "rendering" || Object.values(c.posts || {}).some((v) => ["queued", "uploading", "processing"].includes(v.status)))
   if (filter === "approved") for (const [sid, list] of bySourceGroups(clips)) view.append(groupBox("ready", sid, list, readyCard))
+  else if (filter === "posted") for (const [sid, list] of bySourceGroups(clips)) view.append(groupBox("posted", sid, list, readyCard, [], { pause: false }))
   else for (const c of clips) view.append(readyCard(c))
   if (busyNow) autoRefresh(8000)
 }

@@ -208,3 +208,7 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   back to nova-2 if a language is refused; language hint from earlier chunks; output in Groq's format
   (`punctuated_word`). 401/402/403 → backup paused 6 h (kv `deepgram_off`), jobs wait for Groq as before. Usage
   `usage.deepgram_seconds`; More page shows minutes today + credit left (balance API, cached 1 h). 49 tests.
+- 2026-10-05 23:30 — Deepgram key saved and tested (1 min of PWK: better words — penyiar/parfum/trauma — but almost no
+  punctuation; Groq stays first). First real use: Aa Juju + "DI SINI ADA SUSHIIIII!!!" transcribed via Deepgram
+  (~4 s per 10-min chunk); sushi = 8 clips in review. Ready → Posted is now grouped by video (collapsible, no pause
+  button), like To post.
