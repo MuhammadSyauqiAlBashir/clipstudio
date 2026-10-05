@@ -393,7 +393,7 @@ async function sourcePage(view, id) {
 // Browse: find a YouTube channel and pick videos from its uploads
 // ---------------------------------------------------------------------------------------------------------
 const nf = new Intl.NumberFormat("en", { notation: "compact" })
-const bstate = { q: sessionStorage.getItem("browseQ") || "", channel: sessionStorage.getItem("browseCh") || "", page: "", stack: [], hideShorts: sessionStorage.getItem("hideShorts") !== "0" }
+const bstate = { q: sessionStorage.getItem("browseQ") || "", channel: sessionStorage.getItem("browseCh") || "", page: "", stack: [], tab: "videos", hideShorts: sessionStorage.getItem("hideShorts") !== "0" }
 
 function clipThisSheet(v, ch, watched, onDone) {
   const { body, close } = sheet("Make clips from this video")
@@ -423,9 +423,9 @@ async function browsePage(view) {
     campaignId ? el("div", { class: "card row small" }, el("span", { class: "grow", text: "🎯 Videos you clip here count for the campaign (its hashtags go into the captions)." }),
       el("button", { class: "btn sm", type: "button", text: "Stop", onclick: () => { sessionStorage.removeItem("browseCampaign"); render() } })) : null,
     el("div", { class: "card col" }, form,
-    el("p", { class: "hint", style: { margin: 0 }, text: "Each page costs ~3 of 10,000 free YouTube units a day; a name search costs 100." })))
+    el("p", { class: "hint", style: { margin: 0 }, text: "Free: reads YouTube's own pages (no API quota). A page takes a few seconds." })))
   if (!bstate.q && !bstate.channel) return
-  const params = new URLSearchParams(bstate.channel ? { channel: bstate.channel, page: bstate.page } : { q: bstate.q })
+  const params = new URLSearchParams(bstate.channel ? { channel: bstate.channel, page: bstate.page, tab: bstate.tab } : { q: bstate.q })
   const r = await api(`/browse/youtube?${params}`)
   if (r.choices) {
     if (!r.choices.length) { view.append(el("div", { class: "empty" }, el("b", { text: "🤷" }), "No channel found.")); return }
@@ -441,10 +441,11 @@ async function browsePage(view) {
   hide.onchange = () => { bstate.hideShorts = hide.checked; sessionStorage.setItem("hideShorts", hide.checked ? "1" : "0"); render() }
   view.append(el("div", { class: "card row" },
     el("img", { src: ch.thumb, alt: "", style: { width: "56px", height: "56px", borderRadius: "50%" } }),
-    el("div", { class: "grow" }, el("b", { text: ch.title }), el("div", { class: "small muted", text: `${ch.handle ? "@" + ch.handle + " · " : ""}${nf.format(ch.subscribers)} subscribers · ${nf.format(ch.video_count)} videos` }),
+    el("div", { class: "grow" }, el("b", { text: ch.title }), el("div", { class: "small muted", text: `${ch.handle ? "@" + ch.handle + " · " : ""}${nf.format(ch.subscribers)} subscribers` }),
       r.watched ? el("span", { class: "chip good", text: `📡 watched (${r.watched.permission})` }) : null),
     el("a", { class: "btn sm", href: ch.url, target: "_blank", rel: "noopener", text: "Open" })),
-    el("label", { class: "switch", style: { margin: "4px 0 10px" } }, hide, "Hide Shorts and videos under 3 minutes"))
+    el("div", { class: "seg" }, [["videos", "Videos"], ["streams", "Live replays"]].map(([k, l]) => el("button", { class: `btn sm ${k === bstate.tab ? "on" : ""}`, type: "button", text: l, onclick: () => { bstate.tab = k; bstate.page = ""; bstate.stack = []; render() } }))),
+    el("label", { class: "switch", style: { margin: "4px 0 10px" } }, hide, "Hide videos under 3 minutes"))
   const vids = r.videos.filter((v) => !(bstate.hideShorts && v.duration < 180))
   if (!vids.length) view.append(el("div", { class: "empty" }, "No long videos on this page."))
   for (const v of vids) {
@@ -459,7 +460,7 @@ async function browsePage(view) {
         el("span", { class: "chip", style: { position: "absolute", right: "4px", bottom: "4px", background: "rgba(0,0,0,.75)", color: "#fff" }, text: mmss(v.duration) })),
       el("div", { class: "col", style: { gap: "4px", minWidth: 0 } },
         el("b", { style: { fontSize: "14px", lineHeight: 1.3 }, text: v.title }),
-        el("div", { class: "small muted", text: `${new Date(v.published).toLocaleDateString()} · ${nf.format(v.views)} views` }),
+        el("div", { class: "small muted", text: `${v.published ? new Date(v.published).toLocaleDateString() + " · " : ""}${nf.format(v.views)} views` }),
         el("div", {}, action))))
   }
   const prev = el("button", { class: "btn", type: "button", text: "← Newer", disabled: !bstate.stack.length })
@@ -467,7 +468,7 @@ async function browsePage(view) {
   const next = el("button", { class: "btn", type: "button", text: "Older →", disabled: !r.next })
   next.onclick = () => { bstate.stack.push(bstate.page); bstate.page = r.next; render(); scrollTo(0, 0) }
   view.append(el("div", { class: "row", style: { justifyContent: "space-between", marginTop: "8px" } }, prev,
-    el("span", { class: "small muted", text: `Page ${bstate.stack.length + 1}${r.total ? ` of ${Math.ceil(r.total / 24)}` : ""}` }), next))
+    el("span", { class: "small muted", text: `Page ${bstate.stack.length + 1}` }), next))
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -701,7 +702,7 @@ async function morePage(view) {
       el("dt", { text: "Free disk" }), el("dd", { text: `${st.disk_free_gb} GB (stops below ${st.disk_min_gb})` }),
       el("dt", { text: "Groq today" }), el("dd", { text: `${Math.round(u.groq_seconds / 60)} / ${Math.round(u.groq_limit / 60)} min audio` }),
       el("dt", { text: "Gemini today" }), el("dd", { text: `${u.gemini_calls} calls${u.gemini_failures ? `, ${u.gemini_failures} busy` : ""}` }),
-      el("dt", { text: "YouTube API" }), el("dd", { text: `${u.yt_units} / ${u.yt_limit} units` })),
+      el("dt", { text: "YouTube API" }), el("dd", { text: `${u.yt_units} / ${u.yt_limit} units · ${u.yt_uploads_left} uploads left (resets 14:00 WIB)` })),
     el("div", { class: "row wrap", style: { marginTop: "10px", gap: "5px" } }, keys)))
   const f = {}
   const num = (k, label, hint) => { f[k] = el("input", { type: "number", value: settings[k], inputmode: "numeric" }); return el("label", { class: "field" }, label, f[k], hint ? el("span", { class: "hint", text: hint }) : null) }

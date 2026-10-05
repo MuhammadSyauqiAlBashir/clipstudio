@@ -159,3 +159,7 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   draft upload tested (processed, deleted). Facebook is the 4th auto-post platform (default on). YouTube test Short
   went public (https://www.youtube.com/shorts/dqwNGKmUPTs); visibility watcher added (push if Google locks one).
   YouTube API quota: 5 uploads/day cap is ours (10,000 units, 1,600 per upload). 40 tests pass.
+- 2026-10-05 10:00 — Browse now uses yt-dlp flat listings (no API quota; Videos / Live replays tabs, 24 per page,
+  cached 10 min; name search via YouTube's channel search page). YouTube API counters count by **Google's day**
+  (`db.google_day()`, resets 14:00 WIB) with one shared budget `CS_YT_DAILY_UNITS`=9,800; uploads max 6/day within it.
+  CSP img-src + `yt3.googleusercontent.com`. (Owner had used 5 uploads via Post now on 2026-10-05.) 40 tests.

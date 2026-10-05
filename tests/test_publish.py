@@ -202,8 +202,14 @@ def test_youtube_connect_upload_and_limits(state, monkeypatch):
     db.execute("UPDATE posts SET status='queued'")  # a retry never uploads twice
     asyncio.run(publish.run_one())
     assert len(calls) == 1
-    db.usage_add("yt_uploads", youtube.DAILY_UPLOADS)
+    db.usage_add("yt_uploads", youtube.DAILY_UPLOADS, db.google_day())  # counted on Google's day
     assert youtube.uploads_left() == 0
+    db.execute("DELETE FROM usage")
+    db.usage_add("yt_units", 9000, db.google_day())  # the shared budget also limits uploads
+    assert youtube.uploads_left() == 0
+    db.execute("DELETE FROM usage")
+    db.usage_add("yt_units", 9000, "1999-01-01")      # yesterday's (Google day) usage doesn't count
+    assert youtube.uploads_left() == youtube.DAILY_UPLOADS
 
 
 def test_facebook_reel_flow(state, monkeypatch):

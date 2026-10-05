@@ -6,9 +6,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import json
 import re
 import time
 import xml.etree.ElementTree as ET
+from urllib.parse import urlencode
 
 import httpx
 
@@ -80,11 +82,11 @@ def iso_duration(s: str) -> float:
 async def _api(path: str, params: dict) -> dict:
     if not config.YT_API_KEY:
         raise YTError("YT_API_KEY is not set.")
-    if db.usage_get("yt_units") >= config.YT_DAILY_UNITS:
-        raise YTError("YouTube daily unit budget used")
+    if db.usage_get("yt_units", db.google_day()) >= config.YT_DAILY_UNITS:
+        raise YTError("YouTube API quota for today is used up (resets 14:00 WIB)")
     async with httpx.AsyncClient(timeout=20) as http:
         r = await http.get(f"{API}/{path}", params={**params, "key": config.YT_API_KEY})
-    db.usage_add("yt_units", 1)
+    db.usage_add("yt_units", 1, db.google_day())
     if r.status_code != 200:
         raise YTError(f"YouTube API {r.status_code}: {r.text[:200]}")
     return r.json()
@@ -158,61 +160,101 @@ def video_id_of(text: str) -> str:
     return m.group(1) if m else ""
 
 
-async def channel_info(channel_id: str) -> dict:
-    cache = db.kv_get(f"ytch:{channel_id}")
-    if cache and cache.get("at", 0) > time.time() - 86400:
-        return cache
-    items = (await _api("channels", {"part": "snippet,contentDetails,statistics", "id": channel_id})).get("items") or []
-    if not items:
-        raise YTError("YouTube channel not found")
-    it = items[0]
-    sn, st = it["snippet"], it.get("statistics") or {}
-    handle = (sn.get("customUrl") or "").lstrip("@")
-    info = {"id": it["id"], "title": sn.get("title", ""), "handle": handle, "thumb": _thumb(sn.get("thumbnails") or {}),
-            "subscribers": int(st.get("subscriberCount") or 0), "video_count": int(st.get("videoCount") or 0),
-            "uploads": it.get("contentDetails", {}).get("relatedPlaylists", {}).get("uploads", ""),
-            "url": f"https://www.youtube.com/@{handle}" if handle else f"https://www.youtube.com/channel/{it['id']}",
-            "at": time.time()}
-    db.kv_set(f"ytch:{channel_id}", info)
-    return info
+PAGE_SIZE = 24
+TABS = {"videos": "videos", "streams": "streams"}
+
+
+async def _flat(url: str, first: int, last: int) -> dict:
+    """yt-dlp's flat listing of a channel tab or a search: no API quota (reads YouTube's own pages)."""
+    from . import fetch  # local import: fetch is only needed for Browse
+    work = config.STATE_DIR / "cache" / "browse"
+    work.mkdir(parents=True, exist_ok=True)
+    out = await fetch.ytdlp(["-J", "--flat-playlist", "--playlist-items", f"{first}:{last}", url], work, timeout=120)
+    start = out.find("{")
+    try:
+        return json.loads(out[start:out.rfind("}") + 1])
+    except ValueError as e:
+        raise YTError("YouTube didn't return the channel page") from e
+
+
+def _https(u: str) -> str:
+    return "https:" + u if u.startswith("//") else u
+
+
+def _avatar(thumbs: list) -> str:
+    for t in reversed(thumbs or []):
+        if "avatar" in str(t.get("id", "")) or (t.get("width") and t.get("width") == t.get("height")):
+            return _https(t.get("url", ""))
+    return _https((thumbs or [{}])[-1].get("url", "")) if thumbs else ""
+
+
+def channel_url(channel_id_or_handle: str) -> str:
+    t = channel_id_or_handle.strip()
+    return f"https://www.youtube.com/channel/{t}" if re.fullmatch(r"UC[\w-]{22}", t) else f"https://www.youtube.com/@{t.lstrip('@')}"
 
 
 async def find_channels(text: str) -> tuple[str, list[dict]]:
-    """A handle, channel link, channel id or video link → (channel_id, []); a plain name → ("", up to 6 matches).
-    Name search uses search.list (100 units), so it's only tried when nothing else matches."""
+    """A handle, channel link, channel id or video link → (channel id or @handle, []); a plain name → ("", matches).
+    Everything goes through yt-dlp, so looking up channels costs no API quota."""
     t = text.strip()
     vid = video_id_of(t)
     if vid:
-        v = await videos([vid])
-        if not v:
-            raise YTError("Video not found")
-        return v[0]["channel_id"], []
-    if re.search(r"UC[\w-]{22}", t) or "@" in t or "youtube.com/" in t:
-        return (await resolve(t))["ext_id"], []
-    try:  # maybe the text is a handle without @
-        if re.fullmatch(r"[\w.\-]{3,30}", t):
-            return (await resolve("@" + t))["ext_id"], []
-    except YTError:
-        pass
-    data = await _api("search", {"part": "snippet", "type": "channel", "q": t, "maxResults": 6})
-    db.usage_add("yt_units", 99)  # search.list costs 100 units (1 already counted)
-    out = [{"id": it["snippet"]["channelId"], "title": it["snippet"]["title"],
-            "thumb": _thumb(it["snippet"].get("thumbnails") or {}), "description": it["snippet"].get("description", "")[:120]}
-           for it in data.get("items") or []]
+        from . import fetch
+        meta = await fetch.info(f"https://www.youtube.com/watch?v={vid}", config.STATE_DIR / "cache" / "browse")
+        return meta["channel_id"] or meta["creator_url"], []
+    m = re.search(r"(UC[\w-]{22})", t)
+    if m:
+        return m.group(1), []
+    h = re.search(r"@([\w.\-]+)", t)
+    if h:
+        return "@" + h.group(1), []
+    if "youtube.com/" in t:
+        return t.rstrip("/").rsplit("/", 1)[-1], []
+    if re.fullmatch(r"[\w.\-]{3,30}", t):  # maybe a handle typed without @
+        try:
+            d = await _flat(channel_url(t) + "/videos", 1, 1)
+            if d.get("channel_id"):
+                return d["channel_id"], []
+        except Exception:  # noqa: BLE001 - not a handle: search by name below
+            pass
+    d = await _flat("https://www.youtube.com/results?" + urlencode({"search_query": t, "sp": "EgIQAg=="}), 1, 6)
+    out = [{"id": e.get("id", ""), "title": e.get("title", ""), "thumb": _https((e.get("thumbnails") or [{}])[-1].get("url", "")),
+            "description": f"{int(e.get('channel_follower_count') or 0):,} subscribers"}
+           for e in d.get("entries") or [] if str(e.get("id", "")).startswith("UC")]
     return "", out
 
 
-async def uploads_page(channel_id: str, page_token: str = "", per_page: int = 24) -> dict:
-    """One page of a channel's uploads, newest first (playlistItems + videos: 2 units)."""
-    ch = await channel_info(channel_id)
-    if not ch["uploads"]:
-        return {"channel": ch, "videos": [], "next": "", "prev": "", "total": 0}
-    params = {"part": "contentDetails", "playlistId": ch["uploads"], "maxResults": per_page}
-    if page_token:
-        params["pageToken"] = page_token
-    data = await _api("playlistItems", params)
-    ids = [it["contentDetails"]["videoId"] for it in data.get("items") or []]
-    info = {v["id"]: v for v in await videos(ids)} if ids else {}
-    vids = [info[i] for i in ids if i in info]
-    return {"channel": ch, "videos": vids, "next": data.get("nextPageToken", ""), "prev": data.get("prevPageToken", ""),
-            "total": (data.get("pageInfo") or {}).get("totalResults", 0)}
+async def uploads_page(channel: str, page: str = "", tab: str = "videos") -> dict:
+    """One page (24) of a channel's videos or live replays, newest first, via yt-dlp (0 API units).
+    `page` is the page number as text ("" = 1). Results are cached 10 minutes."""
+    n = max(1, int(page or 1))
+    key = f"browse:{channel}:{tab}:{n}"
+    hit = db.kv_get(key)
+    if hit and hit.get("at", 0) > time.time() - 600:
+        return hit["data"]
+    first = (n - 1) * PAGE_SIZE + 1
+    from .fetch import FetchError
+    try:
+        d = await _flat(channel_url(channel) + "/" + TABS.get(tab, "videos"), first, first + PAGE_SIZE - 1)
+    except FetchError as e:
+        if "does not have a" not in str(e) or tab == "videos":
+            raise
+        d = await _flat(channel_url(channel) + "/videos", 1, 1)  # channel header only: this tab is empty
+        d["entries"] = []
+    cid = d.get("channel_id") or channel
+    handle = (d.get("uploader_id") or "").lstrip("@")
+    ch = {"id": cid, "title": d.get("channel") or d.get("uploader") or "", "handle": handle,
+          "thumb": _avatar(d.get("thumbnails") or []), "subscribers": int(d.get("channel_follower_count") or 0),
+          "video_count": 0, "url": f"https://www.youtube.com/@{handle}" if handle else channel_url(cid)}
+    vids = []
+    for e in d.get("entries") or []:
+        if not e.get("id"):
+            continue
+        vids.append({"id": e["id"], "title": e.get("title", ""), "duration": float(e.get("duration") or 0),
+                     "views": int(e.get("view_count") or 0), "state": "live" if e.get("live_status") == "is_live" else
+                     "upcoming" if e.get("live_status") == "is_upcoming" else "none",
+                     "thumb": f"https://i.ytimg.com/vi/{e['id']}/mqdefault.jpg", "published": "", "channel_id": cid})
+    data = {"channel": ch, "videos": vids, "next": str(n + 1) if len(vids) == PAGE_SIZE else "",
+            "prev": str(n - 1) if n > 1 else "", "total": 0}
+    db.kv_set(key, {"at": time.time(), "data": data})
+    return data

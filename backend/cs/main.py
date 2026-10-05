@@ -291,16 +291,18 @@ async def upload(request: Request, name: str, permission: str, title: str = "", 
 
 
 @app.get("/api/browse/youtube")
-async def browse_youtube(q: str = "", channel: str = "", page: str = "", s: Session = Depends(current)):
+async def browse_youtube(q: str = "", channel: str = "", page: str = "", tab: str = "videos",
+                         s: Session = Depends(current)):
     """Search a YouTube channel (handle / link / video link / name) and list its uploads, page by page."""
     try:
         if not channel:
             channel, choices = await yt.find_channels(q)
             if not channel:
                 return {"choices": choices}
-        res = await yt.uploads_page(channel, page)
-    except yt.YTError as e:
+        res = await yt.uploads_page(channel, page, tab)
+    except (yt.YTError, fetch.FetchError) as e:
         raise HTTPException(400, str(e)) from e
+    channel = res["channel"]["id"]
     ids = [v["id"] for v in res["videos"]]
     added = {}
     if ids:
@@ -311,7 +313,7 @@ async def browse_youtube(q: str = "", channel: str = "", page: str = "", s: Sess
     for v in res["videos"]:
         v["added"] = added.get(v["id"])
         v["url"] = f"https://www.youtube.com/watch?v={v['id']}"
-    ch = {k: v for k, v in res["channel"].items() if k not in ("uploads", "at")}
+    ch = res["channel"]
     return {"channel": ch, "videos": res["videos"], "next": res["next"], "prev": res["prev"], "total": res["total"],
             "watched": watched}
 
@@ -1081,7 +1083,8 @@ async def status(s: Session = Depends(current)):
         "disk_free_gb": round(du.free / 1e9, 1), "disk_min_gb": config.MIN_FREE_DISK_GB,
         "usage": {"groq_seconds": db.usage_get("groq_seconds"), "groq_limit": config.GROQ_DAILY_SECONDS,
                   "gemini_calls": db.usage_get("gemini_calls"), "gemini_failures": db.usage_get("gemini_failures"),
-                  "yt_units": db.usage_get("yt_units"), "yt_limit": config.YT_DAILY_UNITS},
+                  "yt_units": db.usage_get("yt_units", db.google_day()), "yt_limit": config.YT_DAILY_UNITS,
+                  "yt_uploads_left": youtube.uploads_left()},
         "keys": {"gemini": bool(config.GEMINI_API_KEY), "groq": bool(config.GROQ_API_KEY),
                  "youtube": bool(config.YT_API_KEY), "twitch": twitch.configured(), "kick": kick.configured(),
                  "cookies": config.COOKIES_FILE.exists()},

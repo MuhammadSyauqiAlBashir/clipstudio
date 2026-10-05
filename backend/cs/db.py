@@ -8,6 +8,7 @@ import sqlite3
 import threading
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from . import config
@@ -223,6 +224,11 @@ def now() -> float:
 
 def today() -> str:
     return datetime.now(config.TZ).strftime("%Y-%m-%d")
+
+
+def google_day() -> str:
+    """Google's quota day (resets at midnight Pacific = 14:00/15:00 WIB): use it for YouTube API counters."""
+    return datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%Y-%m-%d")
 
 
 def conn() -> sqlite3.Connection:
