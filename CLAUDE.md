@@ -188,3 +188,7 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   video first, clips in time order; multi-select with a bulk bar. Copy buttons show "✓ Copied" + animation. Tab bar
   uses line SVG icons. Bottom-bar lift fixed with the finance app's app-frame layout (body fixed height --app-h, only
   <main> scrolls, tab bar is the last flex row). Deploy waits for an idle worker. 45 tests.
+- 2026-10-05 20:45 — Fixes after the owner's phone check: frame height = window.innerHeight (the screen height pushed the
+  tab bar off the bottom with the "default" status bar), `[hidden]` really hides (empty bulk bar showed as a black
+  line), append() skips null (printed "null"). Queue panels "Clip-making queue" / "Final render & posting queue" with
+  named items, status light and plain-language waits (`friendly_wait`); Add page: "Refused / failed" folded section.

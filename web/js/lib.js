@@ -3,6 +3,16 @@
 export const $ = (s, r = document) => r.querySelector(s)
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// append/replaceChildren skip empty parts (cond ? node : null) instead of printing "null".
+for (const proto of [Element.prototype, DocumentFragment.prototype]) {
+  for (const name of ["append", "prepend", "replaceChildren"]) {
+    const orig = proto[name]
+    proto[name] = function (...nodes) {
+      return orig.apply(this, nodes.flat(Infinity).filter((n) => n !== null && n !== undefined && n !== false))
+    }
+  }
+}
+
 export function el(tag, props = {}, ...kids) {
   const n = document.createElement(tag)
   for (const [k, v] of Object.entries(props || {})) {

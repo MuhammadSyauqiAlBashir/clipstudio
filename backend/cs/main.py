@@ -211,15 +211,72 @@ def source_out(s: dict) -> dict:
     return {**s, "clips": counts, "job": job}
 
 
+def friendly_wait(reason: str, until: float) -> str:
+    """The worker's wait reasons in plain words."""
+    at = datetime.fromtimestamp(until, config.TZ).strftime("%H:%M") if until else ""
+    r = (reason or "").lower()
+    if "groq daily" in r:
+        return "Waiting for tomorrow's free transcription allowance (continues after 00:00 WIB)"
+    if "groq" in r:
+        return f"Transcription limit for this hour reached — continues at {at}"
+    if "gemini" in r:
+        return f"AI (Gemini) busy or out of free quota — tries again at {at}"
+    if "disk" in r:
+        return "Low disk space — waiting for the cleanup"
+    if "paused by owner" in r:
+        return "Paused by you"
+    if "retrying" in r:
+        return f"Retrying after an error at {at}"
+    return reason or (f"Waiting until {at}" if until and until > time.time() else "Waiting for its turn")
+
+
+STEP_LABEL = {"queued": "Waiting for its turn", "downloading": "Downloading", "transcribing": "Transcribing",
+              "scoring": "Finding the best moments", "rendering": "Making previews", "recording": "🔴 Recording live",
+              "waiting_replay": "Waiting for the live replay", "uploading": "Uploading"}
+
+
 @app.get("/api/queue")
 async def queue_state(s: Session = Depends(current)):
     st = db.settings()
-    jobs = {r["kind"]: r["n"] for r in db.all("SELECT kind, COUNT(*) n FROM jobs WHERE status='queued' GROUP BY kind")}
-    running = db.all("SELECT j.kind, j.clip_id, j.source_id FROM jobs j WHERE j.status='running'")
-    posts = db.one("SELECT COUNT(*) n FROM posts WHERE status IN ('queued','uploading','processing')")["n"]
+    now = time.time()
+    making = []
+    for src in db.all("SELECT id, title, creator, status, step, progress, paused FROM sources WHERE status IN "
+                      "('queued','uploading','downloading','transcribing','scoring','rendering','recording','waiting_replay') "
+                      "ORDER BY id"):
+        job = db.one("SELECT status, not_before, wait_reason FROM jobs WHERE source_id=? AND status IN ('queued','running') "
+                     "ORDER BY id DESC LIMIT 1", (src["id"],)) or {}
+        working = job.get("status") == "running"
+        waiting = not working and (job.get("not_before") or 0) > now
+        if working:
+            state = STEP_LABEL.get(src["status"], src["status"]) + (f" · {src['step']}" if src["step"] else "")
+        elif waiting:
+            state = friendly_wait(job.get("wait_reason", ""), job.get("not_before", 0))
+        elif src["status"] in ("recording", "waiting_replay"):
+            state = STEP_LABEL[src["status"]]
+        else:
+            state = "Waiting for its turn"
+        making.append({"id": src["id"], "title": src["title"] or "Video", "creator": src["creator"], "working": working,
+                       "waiting": waiting, "paused": bool(src["paused"]), "state": state,
+                       "progress": src["progress"] if working else None})
+    finals = [{"clip_id": c["id"], "hook": c["hook"], "source": c["title"] or "", "working": c["status"] == "rendering",
+               "paused": bool(c["paused"]), "state": "Making the 1080×1920 video" if c["status"] == "rendering" else "Waiting to render"}
+              for c in db.all("SELECT c.id, c.hook, c.status, s.title, s.paused FROM clips c JOIN sources s ON s.id=c.source_id "
+                              "WHERE c.status IN ('approved','rendering') ORDER BY c.status='rendering' DESC, c.updated_at")]
+    posts = []
+    for p in db.all("SELECT p.id, p.clip_id, p.platform, p.status, p.not_before, p.error, c.hook, s.paused FROM posts p "
+                    "JOIN clips c ON c.id=p.clip_id JOIN sources s ON s.id=c.source_id "
+                    "WHERE p.status IN ('queued','uploading','processing') ORDER BY p.status='queued', p.not_before, p.id"):
+        when = datetime.fromtimestamp(p["not_before"], config.TZ).strftime("%a %H:%M") if p["not_before"] > now else ""
+        state = {"uploading": "Uploading…", "processing": "Processing on the platform…"}.get(p["status"]) or (
+            f"Scheduled {when}" if when else "Next in line")
+        if p["platform"] == "tiktok" and p["status"] == "queued":
+            state += " · goes to your TikTok inbox as a draft"
+        posts.append({"id": p["id"], "clip_id": p["clip_id"], "platform": p["platform"], "hook": p["hook"],
+                      "working": p["status"] != "queued", "paused": bool(p["paused"]), "state": state})
     return {"pause_processing": bool(st.get("pause_processing")), "pause_posting": bool(st.get("pause_posting")),
-            "queued": {"process": jobs.get("process", 0), "final": jobs.get("final", 0), "posts": posts},
-            "running": running, "paused_sources": [r["id"] for r in db.all("SELECT id FROM sources WHERE paused=1")]}
+            "making": making, "finals": finals, "posts": posts,
+            "queued": {"process": len(making), "final": len(finals), "posts": len(posts)},
+            "paused_sources": [r["id"] for r in db.all("SELECT id FROM sources WHERE paused=1")]}
 
 
 class PauseIn(BaseModel):
