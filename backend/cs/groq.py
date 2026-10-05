@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config, db, media
+from . import config, db, deepgram, media
 
 log = logging.getLogger("cs.groq")
 
@@ -113,16 +113,31 @@ async def transcribe(audio: Path, duration: float, work: Path, progress=None) ->
             results.append((s, e, json.loads(cache.read_text())))
             continue
         need = e - s
-        used = db.usage_get("groq_seconds")
-        if used + need > config.GROQ_DAILY_SECONDS:
-            raise QuotaWait(time.time() + 3600, f"Groq daily audio budget used ({int(used)} s today)")
         part = work / f"chunk_{i:03d}.mp3"
         await asyncio.to_thread(media.ffmpeg, "-ss", f"{s:.2f}", "-t", f"{need:.2f}", "-i", str(audio), "-c", "copy",
                                 str(part))
-        raw = await _request(part)
-        part.unlink(missing_ok=True)
-        db.usage_add("groq_seconds", max(10.0, need))  # Groq bills at least 10 s per request
-        res = _clean(raw, s)
+        try:
+            used = db.usage_get("groq_seconds")
+            if used + need > config.GROQ_DAILY_SECONDS:
+                raise QuotaWait(time.time() + 3600, f"Groq daily audio budget used ({int(used)} s today)")
+            raw = await _request(part)
+            db.usage_add("groq_seconds", max(10.0, need))  # Groq bills at least 10 s per request
+            res = _clean(raw, s)
+        except QuotaWait as wait:
+            # Groq can't take it now: the backup (Deepgram credit) does this chunk, if it's set up and has credit
+            if not deepgram.usable():
+                raise
+            known = [r[2].get("language") for r in results if r[2].get("language")]
+            try:
+                res = await deepgram.transcribe(part, s, known[-1] if known else "")
+            except deepgram.Unavailable as e:
+                log.info("deepgram backup unavailable: %s", e)
+                raise wait from e
+            db.usage_add("deepgram_seconds", need)
+            res["by"] = "deepgram"
+            log.info("chunk %d transcribed by Deepgram (%s)", i, wait)
+        finally:
+            part.unlink(missing_ok=True)
         cache.write_text(json.dumps(res, ensure_ascii=False))
         results.append((s, e, res))
         if progress:

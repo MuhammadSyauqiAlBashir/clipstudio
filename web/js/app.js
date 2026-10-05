@@ -880,6 +880,8 @@ async function morePage(view) {
       el("dt", { text: "Queue" }), el("dd", { text: Object.entries(st.queue).map(([k, n]) => `${n} ${k}`).join(", ") || "empty" }),
       el("dt", { text: "Free disk" }), el("dd", { text: `${st.disk_free_gb} GB (stops below ${st.disk_min_gb})` }),
       el("dt", { text: "Groq today" }), el("dd", { text: `${Math.round(u.groq_seconds / 60)} / ${Math.round(u.groq_limit / 60)} min audio` }),
+      el("dt", { text: "Deepgram (backup)" }), el("dd", { text: !u.deepgram.set_up ? "not set up — when Groq's allowance is used up, videos wait for the next day"
+        : `${Math.round(u.deepgram_seconds / 60)} min today${u.deepgram.credit != null ? ` · $${u.deepgram.credit.toFixed(2)} credit left` : ""}${u.deepgram.paused ? ` · ⏸ ${u.deepgram.paused}` : " · takes over when Groq's allowance is used up"}` }),
       el("dt", { text: "Gemini today" }), el("dd", { text: `${u.gemini_calls} calls${u.gemini_failures ? `, ${u.gemini_failures} busy` : ""}` }),
       el("dt", { text: "YouTube API" }), el("dd", { text: `${u.yt_units} / ${u.yt_limit} units · ${u.yt_uploads_left} uploads left (resets 14:00 WIB)` })),
     el("div", { class: "row wrap", style: { marginTop: "10px", gap: "5px" } }, keys)))

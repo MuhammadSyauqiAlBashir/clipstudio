@@ -91,7 +91,7 @@ the .jsonl).
 | Worker | `clipstudio-worker.service` (same user): `Nice=10`, `CPUQuota=100%`, `MemoryMax=900M`, idle I/O; no `MemoryDenyWriteExecute` (deno JIT) |
 | yt-dlp | updated daily by `clipstudio-ytdlp-update.timer` (05:20); deno 2.9.7 in `/usr/local/bin` (checksum verified); ffmpeg 6.1 (apt) |
 | Data | **Own SQLite** `/var/lib/clipstudio/clipstudio.db` (tables channels, sources, jobs, clips, events, usage, kv, push_subs, seen, inbox); work `/var/lib/clipstudio/work/s<id>/`, finals `/var/lib/clipstudio/clips/`, VAPID key `/var/lib/clipstudio/vapid_private.pem`. **No PocketBase collections**; login reads the shared `users` only |
-| Secrets | `/etc/clipstudio/env` (`root:clipstudio 640`): `GEMINI_API_KEY`, `GROQ_API_KEY`, `YT_API_KEY` (restricted to YouTube Data API v3 + IP 103.103.21.9); later `TWITCH_CLIENT_ID/SECRET`, `KICK_CLIENT_ID/SECRET`. Optional cookies `/etc/clipstudio/youtube-cookies.txt` (deploy sets `root:clipstudio 640`). `CS_WEBSUB_SECRET` unset → random one in the DB `kv` |
+| Secrets | `/etc/clipstudio/env` (`root:clipstudio 640`): `GEMINI_API_KEY`, `GROQ_API_KEY`, `DEEPGRAM_API_KEY` (backup), `YT_API_KEY` (restricted to YouTube Data API v3 + IP 103.103.21.9); later `TWITCH_CLIENT_ID/SECRET`, `KICK_CLIENT_ID/SECRET`. Optional cookies `/etc/clipstudio/youtube-cookies.txt` (deploy sets `root:clipstudio 640`). `CS_WEBSUB_SECRET` unset → random one in the DB `kv` |
 | Site | `clips.bashir.my.id` block appended to `/etc/caddy/Caddyfile` (backup `~/work/Caddyfile.bak-20261004-141255`); source `deploy/Caddyfile.clipstudio`; uploads up to 8 GB; public signed callbacks `/api/websub/callback`, `/api/twitch/callback` |
 | Static | `/srv/clipstudio` |
 | Dev | `.venv` in the repo; `~/work/clipstudio-dev/dev.sh <script.py>` runs with the real keys against `~/work/clipstudio-dev/state`, capped like the worker. (Don't use `~/work/cs-dev`: it belongs to another project.) |
@@ -202,3 +202,9 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   `render.calm_path` (shots split at cuts, dead zone 10% of the crop width, Gaussian ~0.35 s) + Catmull-Rom → one crop
   update per source frame, 1-px steps (`crop exact=1`). Measured on clip 62: old 46 px/freeze/freeze, new steady
   3–6 px per frame. Render-time only, so it applies to all new previews and finals (saved plans reused).
+- 2026-10-05 22:40 — Deepgram as the **backup transcriber** (owner's OK): `backend/cs/deepgram.py`, used per 10-min chunk
+  only when Groq can't take it (daily allowance used / long 429). One-time $200 sign-up credit on
+  bashclip.everyday@gmail.com, no card (so it can never charge); `DEEPGRAM_API_KEY` in the env file; model nova-3, falls
+  back to nova-2 if a language is refused; language hint from earlier chunks; output in Groq's format
+  (`punctuated_word`). 401/402/403 → backup paused 6 h (kv `deepgram_off`), jobs wait for Groq as before. Usage
+  `usage.deepgram_seconds`; More page shows minutes today + credit left (balance API, cached 1 h). 49 tests.
