@@ -167,3 +167,51 @@ def test_sync_all_keeps_going_when_one_platform_fails(monkeypatch):
     monkeypatch.setattr(autopilot, "youtube_visibility", ok_yt)
     asyncio.run(autopilot.sync_all())
     assert ran == ["ig", "fb", "yt"] and db.kv_get("stats_synced") > 0
+
+
+def test_pauses_and_bulk(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from cs import db, main, publish, worker
+    now = db.now()
+    s1 = db.insert("sources", {"title": "A", "created_at": now, "updated_at": now})
+    s2 = db.insert("sources", {"title": "B", "created_at": now, "updated_at": now})
+    db.enqueue("process", source_id=s1, priority=10)
+    c2 = db.insert("clips", {"source_id": s2, "start": 0, "end": 20, "status": "approved", "created_at": now, "updated_at": now})
+    db.enqueue("final", clip_id=c2, priority=30)
+    assert worker.next_job(("final", "process"))["kind"] == "final"
+    db.kv_set("settings", {"pause_posting": True})                 # finals & posting paused
+    assert worker.next_job(("final", "process"))["kind"] == "process"
+    db.kv_set("settings", {"pause_posting": False})
+    db.update("sources", s2, {"paused": 1})                         # this video paused
+    assert worker.next_job(("final", "process"))["source_id"] == s1
+    db.update("sources", s1, {"paused": 1})
+    assert worker.next_job(("final", "process")) is None
+    # posting: paused video's queued post waits, an uploading one finishes
+    from cs import config
+    final = config.STATE_DIR / "final.mp4"
+    final.write_bytes(b"v")
+    c3 = db.insert("clips", {"source_id": s2, "start": 0, "end": 20, "status": "ready", "final": str(final), "created_at": now, "updated_at": now})
+    db.execute("INSERT INTO posts(clip_id,platform,status,created_at,updated_at) VALUES(?,?,?,?,?)", (c3, "instagram", "queued", now, now))
+    assert not asyncio.run(publish.run_one())
+    db.execute("UPDATE posts SET status='uploading'")
+    called = []
+
+    async def fake_ig(post, clip, caption):
+        called.append(1)
+        return "m", "https://instagram.com/x"
+    monkeypatch.setattr(publish, "instagram", fake_ig)
+    assert asyncio.run(publish.run_one()) and called
+
+    main.app.dependency_overrides[main.current] = lambda: main.Session({"username": "bashirsyauqi"}, "t")
+    with TestClient(main.app, headers={"X-CS": "1"}) as c:
+        q = c.put("/api/queue/pause", json={"what": "processing", "paused": True}).json()
+        assert q["pause_processing"] is True and s1 in q["paused_sources"]
+        r1 = db.insert("clips", {"source_id": s1, "start": 0, "end": 20, "status": "review", "created_at": now, "updated_at": now})
+        r2 = db.insert("clips", {"source_id": s1, "start": 30, "end": 50, "status": "review", "created_at": now, "updated_at": now})
+        db.update("sources", s1, {"file": "/somewhere.mkv"})
+        res = c.post("/api/clips/bulk", json={"ids": [r1, r2, 99999], "action": "reject", "reason": "bulk"}).json()
+        assert res["done"] == [r1, r2] and res["skipped"][0]["id"] == 99999
+        assert db.one("SELECT status FROM clips WHERE id=?", (r1,))["status"] == "rejected"
+        assert c.put(f"/api/sources/{s1}/pause", json={"paused": False}).json()["paused"] is False
+    main.app.dependency_overrides.clear()

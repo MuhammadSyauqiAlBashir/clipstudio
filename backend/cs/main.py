@@ -199,7 +199,7 @@ async def health():
 # ---------------------------------------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------------------------------------
-SOURCE_FIELDS = ("id, channel_id, campaign_id, platform, url, video_id, kind, title, creator, creator_url, duration, permission, "
+SOURCE_FIELDS = ("id, channel_id, campaign_id, paused, platform, url, video_id, kind, title, creator, creator_url, duration, permission, "
                  "proof, status, step, progress, reason, language, size, files_deleted, created_at, updated_at, added_by")
 
 
@@ -209,6 +209,64 @@ def source_out(s: dict) -> dict:
     job = db.one("SELECT status, wait_reason, not_before FROM jobs WHERE source_id=? AND status IN ('queued','running') "
                  "ORDER BY id DESC LIMIT 1", (s["id"],))
     return {**s, "clips": counts, "job": job}
+
+
+@app.get("/api/queue")
+async def queue_state(s: Session = Depends(current)):
+    st = db.settings()
+    jobs = {r["kind"]: r["n"] for r in db.all("SELECT kind, COUNT(*) n FROM jobs WHERE status='queued' GROUP BY kind")}
+    running = db.all("SELECT j.kind, j.clip_id, j.source_id FROM jobs j WHERE j.status='running'")
+    posts = db.one("SELECT COUNT(*) n FROM posts WHERE status IN ('queued','uploading','processing')")["n"]
+    return {"pause_processing": bool(st.get("pause_processing")), "pause_posting": bool(st.get("pause_posting")),
+            "queued": {"process": jobs.get("process", 0), "final": jobs.get("final", 0), "posts": posts},
+            "running": running, "paused_sources": [r["id"] for r in db.all("SELECT id FROM sources WHERE paused=1")]}
+
+
+class PauseIn(BaseModel):
+    what: str = Field(pattern="^(processing|posting)$")
+    paused: bool
+
+
+@app.put("/api/queue/pause")
+async def pause_queue(body: PauseIn, s: Session = Depends(current)):
+    cur = db.kv_get("settings", {}) or {}
+    cur[f"pause_{body.what}"] = body.paused
+    db.kv_set("settings", cur)
+    db.event(f"{'Paused' if body.paused else 'Resumed'} {body.what} ({s.username})", "queue")
+    return await queue_state(s)
+
+
+class SourcePauseIn(BaseModel):
+    paused: bool
+
+
+@app.put("/api/sources/{sid}/pause")
+async def pause_source(sid: int, body: SourcePauseIn, s: Session = Depends(current)):
+    get_source(sid)
+    db.update("sources", sid, {"paused": int(body.paused)})
+    return {"ok": True, "paused": body.paused}
+
+
+class BulkIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=200)
+    action: str = Field(pattern="^(approve|reject)$")
+    reason: str = Field("", max_length=200)
+
+
+@app.post("/api/clips/bulk")
+async def bulk_clips(body: BulkIn, s: Session = Depends(current)):
+    """Approve or reject many clips at once (same rules as one by one)."""
+    done, skipped = [], []
+    for cid in body.ids:
+        try:
+            if body.action == "approve":
+                await approve(cid, s)
+            else:
+                await reject(cid, RejectIn(reason=body.reason), s)
+            done.append(cid)
+        except HTTPException as e:
+            skipped.append({"id": cid, "error": str(e.detail)})
+    return {"done": done, "skipped": skipped}
 
 
 @app.get("/api/sources")
@@ -377,6 +435,7 @@ def clip_out(c: dict, src: dict | None = None) -> dict:
         "final_size": c["final_size"], "posted": db.jload(c["posted"], {}), "decided_by": c["decided_by"],
         "created_at": c["created_at"], "updated_at": c["updated_at"],
         "source": {"title": src.get("title", ""), "creator": src.get("creator", ""), "url": src.get("url", ""),
+                   "paused": bool(src.get("paused")),
                    "platform": src.get("platform", ""), "permission": src.get("permission", ""),
                    "files_deleted": bool(src.get("files_deleted"))},
         "captions": {p: post_caption(c, src, p) for p in PLATFORM_TAGS} if src else {},
@@ -393,7 +452,7 @@ async def clips(status: str = "review", order: str = "", s: Session = Depends(cu
               "rejected": ("rejected", "expired")}
     sts = groups.get(status, (status,))
     marks = ",".join("?" for _ in sts)
-    order = ("source_id, start" if order == "source" else "score DESC") if status == "review" else "updated_at DESC"
+    order = "source_id DESC, start" if order == "source" else "score DESC" if status == "review" else "updated_at DESC"
     rows = db.all(f"SELECT * FROM clips WHERE status IN ({marks}) ORDER BY {order} LIMIT 200", sts)
     counts = {r["status"]: r["n"] for r in db.all("SELECT status, COUNT(*) n FROM clips GROUP BY status")}
     return {"clips": [clip_out(c) for c in rows], "counts": counts}

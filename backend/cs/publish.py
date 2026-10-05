@@ -259,8 +259,13 @@ async def tiktok_draft(post: dict, clip: dict):
 # ---- worker side ---------------------------------------------------------------------------------------
 async def run_one() -> bool:
     """Publish the next due post. True if something was attempted."""
-    post = db.one("SELECT * FROM posts WHERE status IN ('queued','uploading','processing') AND not_before<=? "
-                  "ORDER BY id LIMIT 1", (time.time(),))
+    if db.settings().get("pause_posting"):  # posts already uploading finish (status 'uploading'/'processing')
+        post = db.one("SELECT * FROM posts WHERE status IN ('uploading','processing') AND not_before<=? ORDER BY id "
+                      "LIMIT 1", (time.time(),))
+    else:
+        post = db.one("SELECT p.* FROM posts p JOIN clips c ON c.id=p.clip_id JOIN sources s ON s.id=c.source_id "
+                      "WHERE (p.status IN ('uploading','processing') OR (p.status='queued' AND s.paused=0)) "
+                      "AND p.not_before<=? ORDER BY p.id LIMIT 1", (time.time(),))
     if not post:
         return False
     last = db.one("SELECT MAX(posted_at) t FROM posts WHERE platform=? AND status='done'", (post["platform"],))["t"] or 0

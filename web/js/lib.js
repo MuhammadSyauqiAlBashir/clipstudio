@@ -86,3 +86,38 @@ export function mmss(s) {
 }
 export const gb = (b) => (b / 1e9).toFixed(b > 1e10 ? 0 : 1) + " GB"
 export const mb = (b) => (b / 1e6).toFixed(0) + " MB"
+
+// Line icons (24×24, stroke = currentColor).
+const PATHS = {
+  review: "M4 5h16v14H4zM9.5 9l5 3-5 3z", ready: "M20 7 10 17l-5-5", add: "M12 5v14M5 12h14",
+  campaigns: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM12 12h.01",
+  stats: "M4 20V10M10 20V4M16 20v-7M22 20H2", more: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
+  chev: "M6 9l6 6 6-6", pause: "M8 5v14M16 5v14", play: "M7 5l12 7-12 7z", check: "M5 12.5l4.5 4.5L19 7",
+  copy: "M9 9h11v11H9zM5 15V4h11",
+}
+export function svgIcon(name, cls = "ico") {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg")
+  s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("class", cls); s.setAttribute("aria-hidden", "true")
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path"); p.setAttribute("d", PATHS[name] || "")
+  s.append(p)
+  return s
+}
+
+// Copy with clear feedback: the button turns green with "✓ Copied" for a moment, plus a toast.
+export async function copyText(btn, text, what = "Copied") {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch (_) {
+    toast("Copy failed — long-press the text to copy it", "bad")
+    return false
+  }
+  if (btn) {
+    if (!btn.dataset.label) btn.dataset.label = btn.textContent  // the real label, even after quick double taps
+    btn.classList.remove("copied"); void btn.offsetWidth; btn.classList.add("copied")
+    btn.textContent = "✓ Copied"
+    clearTimeout(btn._copyT)
+    btn._copyT = setTimeout(() => { btn.classList.remove("copied"); btn.textContent = btn.dataset.label }, 1600)
+  }
+  toast(`✓ ${what}`)
+  return true
+}

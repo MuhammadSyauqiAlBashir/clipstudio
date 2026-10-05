@@ -182,3 +182,9 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   (3 tries) → retry when back. `/api/accounts` takes ~40 s while Meta is down (owner: don't change it). Meta back ~17:45 WIB, Google ~17:30; GitHub still down then. A temporary 15-min
   network watcher (transient timer) was used and then stopped and removed at the owner's request.
   Local commits not yet pushed to GitHub (push when reachable). Deploys now wait for an idle worker.
+- 2026-10-05 evening — Queue control: settings `pause_processing` / `pause_posting` (Review / Ready queue bars) and per-video
+  pause (`sources.paused`), honoured by `worker.next_job` and `publish.run_one` (a running step always finishes). Bulk
+  approve/reject (`POST /api/clips/bulk`). Review + Ready "To post" grouped by video, collapsible (remembered), newest
+  video first, clips in time order; multi-select with a bulk bar. Copy buttons show "✓ Copied" + animation. Tab bar
+  uses line SVG icons. Bottom-bar lift fixed with the finance app's app-frame layout (body fixed height --app-h, only
+  <main> scrolls, tab bar is the last flex row). Deploy waits for an idle worker. 45 tests.

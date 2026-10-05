@@ -174,4 +174,4 @@ def test_review_order_by_source(client):
     by_score = [(c["source_id"], c["start"]) for c in client.get("/api/clips?status=review").json()["clips"]]
     by_video = [(c["source_id"], c["start"]) for c in client.get("/api/clips?status=review&order=source").json()["clips"]]
     assert by_score[0] == (s2, 50)
-    assert by_video == [(s1, 20), (s1, 300), (s2, 50)]
+    assert by_video == [(s2, 50), (s1, 20), (s1, 300)]  # newest video first, each in time order
