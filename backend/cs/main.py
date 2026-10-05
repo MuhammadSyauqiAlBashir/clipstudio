@@ -22,7 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from . import campaigns, config, db, facebook, fetch, gate, kick, pipeline, publish, push, tiktok, twitch, youtube, yt
+from . import campaigns, config, db, deepgram, facebook, fetch, gate, kick, pipeline, publish, push, tiktok, twitch, youtube, yt
 from .posttext import PLATFORM_TAGS, post_caption
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -221,8 +221,13 @@ def friendly_wait(reason: str, until: float, attempts: int = 0) -> str:
     at = _at(until) if until else ""
     r = (reason or "").lower()
     if "groq daily" in r:
-        return (f"Today's free transcription allowance ({config.GROQ_DAILY_SECONDS / 3600:g} h of audio) is used up. "
-                "It continues by itself after 00:00 WIB — nothing for you to do.")
+        backup = ""
+        if deepgram.configured():
+            off = db.kv_get("deepgram_off", {}) or {}
+            backup = (f" The Deepgram backup can't help right now ({off.get('why', 'paused')})."
+                      if off.get("until", 0) > time.time() else "")
+        return (f"Today's free transcription allowance ({config.GROQ_DAILY_SECONDS / 3600:g} h of audio) is used up."
+                f"{backup} It continues by itself after 00:00 WIB — nothing for you to do.")
     if "groq not answering" in r:
         return f"Groq (the transcription service) isn't answering. Tries again by itself at {at}."
     if "groq" in r:
@@ -1346,6 +1351,15 @@ async def put_settings(body: SettingsIn, s: Session = Depends(current)):
     return {"settings": db.settings()}
 
 
+async def deepgram_state() -> dict:
+    if not deepgram.configured():
+        return {"set_up": False}
+    off = db.kv_get("deepgram_off", {}) or {}
+    bal = await deepgram.balance()
+    return {"set_up": True, "credit": bal.get("amount"), "units": bal.get("units", "usd"),
+            "paused": off.get("why", "") if off.get("until", 0) > time.time() else ""}
+
+
 @app.get("/api/status")
 async def status(s: Session = Depends(current)):
     beat = db.kv_get("worker_heartbeat", 0) or 0
@@ -1360,8 +1374,9 @@ async def status(s: Session = Depends(current)):
         "usage": {"groq_seconds": db.usage_get("groq_seconds"), "groq_limit": config.GROQ_DAILY_SECONDS,
                   "gemini_calls": db.usage_get("gemini_calls"), "gemini_failures": db.usage_get("gemini_failures"),
                   "yt_units": db.usage_get("yt_units", db.google_day()), "yt_limit": config.YT_DAILY_UNITS,
-                  "yt_uploads_left": youtube.uploads_left()},
-        "keys": {"gemini": bool(config.GEMINI_API_KEY), "groq": bool(config.GROQ_API_KEY),
+                  "yt_uploads_left": youtube.uploads_left(),
+                  "deepgram_seconds": db.usage_get("deepgram_seconds"), "deepgram": await deepgram_state()},
+        "keys": {"gemini": bool(config.GEMINI_API_KEY), "groq": bool(config.GROQ_API_KEY), "deepgram": deepgram.configured(),
                  "youtube": bool(config.YT_API_KEY), "twitch": twitch.configured(), "kick": kick.configured(),
                  "cookies": config.COOKIES_FILE.exists()},
         "events": db.all("SELECT at, level, kind, message, source_id FROM events ORDER BY id DESC LIMIT 40"),

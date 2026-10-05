@@ -223,3 +223,54 @@ def test_cleanup_rules(tmp_path, monkeypatch):
     assert db.one("SELECT status, files_deleted FROM sources WHERE id=?", (decided,)) == {"status": "done", "files_deleted": 1}
     assert (pipeline.work_dir(open_) / "source.mkv").exists()
     assert db.one("SELECT status FROM clips WHERE id=?", (oc,))["status"] == "expired"
+
+
+# ---- transcription backup -------------------------------------------------------------------------------
+def test_deepgram_takes_over_when_groq_allowance_is_used(tmp_path, monkeypatch):
+    import asyncio
+
+    from cs import config, db, deepgram, groq, media
+    monkeypatch.setattr(config, "GROQ_API_KEY", "g")
+    monkeypatch.setattr(config, "GROQ_DAILY_SECONDS", 100)
+    monkeypatch.setattr(media, "ffmpeg", lambda *a: Path(a[-1]).write_bytes(b"mp3"))
+
+    async def no_groq(path):
+        raise AssertionError("Groq must not be called when its allowance is used up")
+    monkeypatch.setattr(groq, "_request", no_groq)
+    audio = tmp_path / "audio.mp3"
+    audio.write_bytes(b"x")
+
+    # no backup set up → the job waits for Groq, as before
+    monkeypatch.setattr(config, "DEEPGRAM_API_KEY", "")
+    with pytest.raises(groq.QuotaWait):
+        asyncio.run(groq.transcribe(audio, 300, tmp_path))
+
+    seen = {}
+
+    async def fake_dg(path, offset, language=""):
+        seen["lang"] = language
+        return {"language": "Indonesian", "words": [{"word": "Halo,", "start": offset + 0.1, "end": offset + 0.4}],
+                "segments": [{"text": "Halo, semua.", "start": offset, "end": offset + 1}]}
+    monkeypatch.setattr(config, "DEEPGRAM_API_KEY", "d")
+    monkeypatch.setattr(deepgram, "transcribe", fake_dg)
+    out = asyncio.run(groq.transcribe(audio, 300, tmp_path))
+    assert out["language"] == "Indonesian" and out["words"][0]["word"] == "Halo,"
+    assert db.usage_get("deepgram_seconds") == 300 and not list(tmp_path.glob("chunk_*.mp3"))
+
+    # credit used up → Deepgram is paused and the job waits for Groq again
+    (tmp_path / "groq_000.json").unlink()
+    deepgram._off("credit used up", 6)
+    with pytest.raises(groq.QuotaWait):
+        asyncio.run(groq.transcribe(audio, 300, tmp_path))
+
+
+def test_deepgram_answer_becomes_groq_format():
+    from cs import deepgram
+    d = {"results": {"channels": [{"detected_language": "id", "alternatives": [{
+        "words": [{"word": "halo", "punctuated_word": "Halo,", "start": 0.5, "end": 0.9},
+                  {"word": "semua", "punctuated_word": "semua.", "start": 1.0, "end": 1.4}],
+        "paragraphs": {"paragraphs": [{"sentences": [{"text": "Halo, semua.", "start": 0.5, "end": 1.4}]}]}}]}]}}
+    r = deepgram.to_result(d, 600)
+    assert r["language"] == "Indonesian"
+    assert r["words"] == [{"word": "Halo,", "start": 600.5, "end": 600.9}, {"word": "semua.", "start": 601.0, "end": 601.4}]
+    assert r["segments"] == [{"text": "Halo, semua.", "start": 600.5, "end": 601.4}]
