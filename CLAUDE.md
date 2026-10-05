@@ -163,3 +163,7 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   cached 10 min; name search via YouTube's channel search page). YouTube API counters count by **Google's day**
   (`db.google_day()`, resets 14:00 WIB) with one shared budget `CS_YT_DAILY_UNITS`=9,800; uploads max 6/day within it.
   CSP img-src + `yt3.googleusercontent.com`. (Owner had used 5 uploads via Post now on 2026-10-05.) 40 tests.
+- 2026-10-05 10:20 — Stats sync every hour for Instagram (insights), Facebook (views/likes/comments fields; deeper
+  insights would need read_insights) and YouTube (views, 45 days; private-lock check); "Sync now" button. TikTok views
+  need the `video.list` scope (another TikTok review) — manual until then. Watched channels: "➕ Add videos" opens
+  Browse on that channel with its permission. 41 tests.

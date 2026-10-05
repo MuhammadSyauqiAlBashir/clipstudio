@@ -536,7 +536,7 @@ async def stats(days: int = 30, s: Session = Depends(current)):
             "creators": sorted(creators.values(), key=lambda c: -c["views"]), "per_day": days_count,
             "queue": {"clips": queued["n"] or 0, "until": queued["last"] or 0},
             "review_waiting": db.one("SELECT COUNT(*) n FROM clips WHERE status='review'")["n"],
-            "ig_insights": not (db.kv_get("ig_insights_error") or "")}
+            "ig_insights": not (db.kv_get("ig_insights_error") or ""), "synced": db.kv_get("stats_synced", 0) or 0}
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -648,6 +648,16 @@ async def campaign_submitted(cid: int, body: SubmittedIn, s: Session = Depends(c
             sub = db.jload(c["submitted"], {}) or {}
             sub[it["platform"]] = time.time()
             db.update("clips", c["id"], {"submitted": db.jdump(sub)})
+    return {"ok": True}
+
+
+@app.post("/api/stats/sync")
+async def stats_sync(s: Session = Depends(current)):
+    last = db.kv_get("stats_synced", 0) or 0
+    if time.time() - last < 60:
+        raise HTTPException(429, "Synced less than a minute ago.")
+    from . import autopilot
+    await autopilot.sync_all()
     return {"ok": True}
 
 

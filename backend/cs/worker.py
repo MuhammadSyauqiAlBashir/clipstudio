@@ -120,8 +120,7 @@ async def watch_loop():
         await every("cleanup", 3600, asyncio.to_thread, pipeline.cleanup)
         await every("reminder", 120, autopilot.daily_reminder)
         await every("weekly", 300, autopilot.weekly_summary)
-        await every("ig_stats", 6 * 3600, autopilot.instagram_stats)
-        await every("yt_visibility", 3 * 3600, autopilot.youtube_visibility)
+        await every("stats", 3600, autopilot.sync_all)
         await every("campaigns", 3 * 3600, campaigns.refresh)
         try:
             await asyncio.wait_for(stop.wait(), timeout=5)

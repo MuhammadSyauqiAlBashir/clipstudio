@@ -565,14 +565,17 @@ async function statsPage(view) {
   const days = +(sessionStorage.getItem("statsDays") || 30)
   const r = await api(`/stats?days=${days}`)
   const names = { instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok", youtube: "YouTube" }
-  view.append(el("h1", { text: "Stats" }),
+  const sync = el("button", { class: "btn sm", type: "button", text: "↻ Sync now" })
+  sync.onclick = () => busy(sync, async () => { await api("/stats/sync", { method: "POST" }); toast("Synced"); render() }).catch(() => {})
+  view.append(el("div", { class: "topbar" }, el("h1", { text: "Stats" }), sync),
+    el("p", { class: "hint", style: { marginTop: 0 }, text: `Instagram, Facebook and YouTube numbers sync every hour${r.synced ? ` (last ${ago(r.synced)})` : ""}. TikTok: type the views in (reading them needs another TikTok permission).` }),
     el("div", { class: "seg" }, [7, 30, 90].map((d) => el("button", { class: `btn sm ${d === days ? "on" : ""}`, type: "button", text: `${d} days`, onclick: () => { sessionStorage.setItem("statsDays", d); render() } }))),
     el("div", { class: "card" }, el("dl", { class: "kv" },
       el("dt", { text: "Views" }), el("dd", { text: r.views.toLocaleString() }),
       ...Object.entries(r.totals).flatMap(([k, v]) => [el("dt", { text: names[k] }), el("dd", { text: `${v.posts} posts · ${v.views.toLocaleString()} views` })]),
       el("dt", { text: "Scheduled" }), el("dd", { text: r.queue.clips ? `${r.queue.clips} clips until ${new Date(r.queue.until * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : "queue empty" }),
       el("dt", { text: "Waiting for you" }), el("dd", {}, r.review_waiting ? el("a", { href: "#review", text: `${r.review_waiting} to review` }) : "none"))),
-    r.ig_insights ? null : el("p", { class: "hint", text: "Instagram views need the 'instagram_business_manage_insights' permission on your Meta app (until then: likes and comments). TikTok and YouTube views: type them in below." }))
+    r.ig_insights ? null : el("p", { class: "hint", text: "Instagram views need the 'instagram_business_manage_insights' permission on your Meta app (until then: likes and comments)." }))
   if (!r.clips.length) { view.append(el("div", { class: "empty" }, el("b", { text: "📊" }), "No posts in this period yet.")); return }
   view.append(el("h2", { text: "Clips, most viewed first" }))
   for (const c of r.clips) {
@@ -582,7 +585,7 @@ async function statsPage(view) {
       el("div", { class: "row wrap", style: { marginTop: "6px", gap: "6px" } }, Object.entries(c.platforms).map(([p, v]) => {
         const inp = el("input", { type: "number", min: 0, value: v.views || "", placeholder: "views", style: { width: "110px", padding: "4px 8px" } })
         inp.onchange = async () => { try { await api(`/clips/${c.clip_id}/views`, { method: "PUT", json: { platform: p, views: +inp.value || 0 } }); toast("Saved") } catch (e) { toast(e.message, "bad") } }
-        const auto = p === "instagram" && !v.manual
+        const auto = ["instagram", "facebook", "youtube"].includes(p) && !v.manual
         return el("span", { class: "chip", style: { padding: "4px 10px" } }, `${names[p]}: `,
           auto ? `${(v.views || 0).toLocaleString()} views${v.likes != null ? ` · ❤ ${v.likes}` : ""}${v.comments != null ? ` · 💬 ${v.comments}` : ""}` : inp,
           v.url ? el("a", { href: v.url, target: "_blank", rel: "noopener", text: " ↗" }) : null)
@@ -636,6 +639,9 @@ async function channelsPage(view) {
       el("div", { class: "small muted" }, c.push ? "⚡ instant notifications on" : "polling", c.last_checked ? ` · checked ${ago(c.last_checked)}` : ""),
       c.last_error ? el("div", { class: "small", style: { color: "var(--bad)" }, text: c.last_error }) : null,
       el("div", { class: "row", style: { marginTop: "8px", justifyContent: "flex-end" } },
+        c.platform === "youtube" ? el("a", { class: "btn sm primary", href: "#browse", text: "➕ Add videos", onclick: () => {
+          bstate.q = c.url; bstate.channel = c.ext_id; bstate.page = ""; bstate.stack = []; bstate.tab = "videos"
+          sessionStorage.setItem("browseQ", c.url); sessionStorage.setItem("browseCh", c.ext_id); sessionStorage.removeItem("browseCampaign") } }) : null,
         el("a", { class: "btn sm", href: c.url, target: "_blank", rel: "noopener", text: "Open" }),
         el("button", { class: "btn sm bad", type: "button", text: "Remove", onclick: async (e) => { if (!confirm(`Stop watching ${c.title}?`)) return; await busy(e.target, () => api(`/channels/${c.id}`, { method: "DELETE" })).catch(() => {}); render() } }))))
   }
