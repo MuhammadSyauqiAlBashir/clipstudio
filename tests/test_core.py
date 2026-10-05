@@ -177,8 +177,13 @@ def test_layout_choice_and_smooth_track():
     assert p2[-1][1] > p2[0][1] + 500  # a lasting change (cut) is followed
     cw = 1080 * 9 / 16
     assert all(0 <= x <= 1920 - cw for _, x in p2)
-    lines = render.sendcmd_lines(p2)
-    assert lines.startswith("0.000 crop x ") and lines.count("\n") > len(p2)
+    lines = render.sendcmd_lines(p2, 606, 30)
+    assert lines.startswith("0.0000 crop x ") and lines.count("\n") >= 30 * p2[-1][0]  # one update per frame
+    xs = [int(l.split()[3].rstrip(";")) for l in lines.splitlines()]
+    steps = [abs(b - a) for a, b in zip(xs, xs[1:])]
+    assert max(steps) > 300 and sorted(steps)[-2] < 40  # the cut jumps once; everything else glides
+    jitter = [(i / 4, 600 + (i % 2) * 30) for i in range(40)]  # face wobbling ±30 px: camera holds still
+    assert len({l.split()[3] for l in render.sendcmd_lines(jitter, 606, 30).splitlines()}) == 1
 
 
 # ---- database -------------------------------------------------------------------------------------------
