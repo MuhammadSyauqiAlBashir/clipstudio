@@ -19,7 +19,7 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
 SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 UPLOAD_UNITS = 1600
-DAILY_UPLOADS = 5  # 5 × 1,600 = 8,000 units; the watchers keep the rest of the 10,000
+DAILY_UPLOADS = 6  # 6 × 1,600 = 9,600 of the shared 9,800-unit budget (Browse uses yt-dlp: no units)
 
 
 class YouTubeError(Exception):
@@ -104,13 +104,15 @@ async def disconnect():
 
 
 def uploads_left() -> int:
-    return max(0, DAILY_UPLOADS - int(db.usage_get("yt_uploads")))
+    day = db.google_day()
+    by_budget = int((config.YT_DAILY_UNITS - db.usage_get("yt_units", day)) // UPLOAD_UNITS)
+    return max(0, min(DAILY_UPLOADS - int(db.usage_get("yt_uploads", day)), by_budget))
 
 
 async def upload(path: Path, title: str, description: str, tags: list[str], language: str = "") -> dict:
     """Resumable upload of one Short. Returns {id, url, privacy, upload_status, channel}."""
     if uploads_left() <= 0:
-        raise YouTubeError(f"Daily YouTube upload limit reached ({DAILY_UPLOADS}/day keeps the free quota safe)")
+        raise YouTubeError("No YouTube uploads left today (Google's free quota resets 14:00 WIB)")
     data = path.read_bytes()
     meta = {"snippet": {"title": title[:100] or "Clip", "description": description[:4900],
                         "tags": [t.lstrip("#")[:30] for t in tags][:15], "categoryId": "24"},
@@ -124,8 +126,8 @@ async def upload(path: Path, title: str, description: str, tags: list[str], lang
                                      "X-Upload-Content-Length": str(len(data))})
         if r.status_code != 200 or "location" not in r.headers:
             raise YouTubeError(f"YouTube {r.status_code}: {r.text[:300]}")
-        db.usage_add("yt_units", UPLOAD_UNITS)
-        db.usage_add("yt_uploads", 1)
+        db.usage_add("yt_units", UPLOAD_UNITS, db.google_day())
+        db.usage_add("yt_uploads", 1, db.google_day())
         r = await http.put(r.headers["location"], content=data, headers={"Content-Type": "video/mp4"})
     if r.status_code not in (200, 201):
         raise YouTubeError(f"YouTube upload {r.status_code}: {r.text[:300]}")

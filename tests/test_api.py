@@ -146,7 +146,7 @@ def test_browse_marks_added_and_blocks_duplicates(client, monkeypatch):
     async def find(q):
         return ("UCabc", []) if "@" in q else ("", [{"id": "UCx", "title": "X", "thumb": "", "description": ""}])
 
-    async def page(cid, token=""):
+    async def page(cid, token="", tab="videos"):
         return {"channel": {"id": cid, "title": "Chan", "handle": "chan", "thumb": "", "subscribers": 1, "video_count": 2,
                             "url": "u", "uploads": "UU", "at": 0},
                 "videos": [{"id": "abcdefghijk", "title": "V1", "duration": 3000, "views": 5, "state": "none", "thumb": "",
