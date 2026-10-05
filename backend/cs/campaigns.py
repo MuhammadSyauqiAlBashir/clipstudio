@@ -106,9 +106,68 @@ def upsert(items: list[dict], platform: str) -> list[dict]:
     return new
 
 
+async def sync_joined():
+    """Mark the campaigns the owner has joined on Clippo (from his own account)."""
+    from . import clippo
+    if not clippo.configured():
+        return
+    ids = await clippo.joined_ids()
+    for r in db.all("SELECT id, ext_id, joined FROM campaigns WHERE platform='clippo'"):
+        if (r["ext_id"] in ids) and not r["joined"]:
+            db.update("campaigns", r["id"], {"joined": 1})
+
+
+async def auto_submit() -> int:
+    """Check posted clips of joined Clippo campaigns with Clippo itself and submit the eligible ones.
+    Not-yet-eligible links (e.g. under 1,000 views) are checked again next time, for up to 14 days."""
+    from . import clippo, push
+    if not clippo.configured() or not db.settings().get("auto_submit", True):
+        return 0
+    sent = 0
+    for camp in db.all("SELECT * FROM campaigns WHERE platform='clippo' AND joined=1 AND status='open'"):
+        allowed = set(db.jload(camp["platforms"], []))
+        pending: list[tuple[int, str, str]] = []
+        for c in db.all("SELECT c.id, c.posted, c.submitted, c.updated_at FROM clips c JOIN sources s ON s.id=c.source_id "
+                        "WHERE s.campaign_id=? AND c.status IN ('ready','posted')", (camp["id"],)):
+            posted, sub = db.jload(c["posted"], {}) or {}, db.jload(c["submitted"], {}) or {}
+            for platform, url in posted.items():
+                if platform in allowed and str(url).startswith("http") and platform not in sub:
+                    post = db.one("SELECT posted_at FROM posts WHERE clip_id=? AND platform=?", (c["id"], platform))
+                    when = (post or {}).get("posted_at") or c["updated_at"]
+                    if time.time() - when < 14 * 86400:
+                        pending.append((c["id"], platform, url))
+        if not pending:
+            continue
+        results = await clippo.bulk_check(camp["ext_id"], [u for _, _, u in pending])
+        ok_items, ok_keys = [], []
+        for (cid, platform, url), res in zip(pending, results):
+            if clippo.eligible(res or {}):
+                ok_items.append(clippo.submission_item(url, res))
+                ok_keys.append((cid, platform))
+            else:
+                db.kv_set(f"clippo_check:{cid}:{platform}", {"at": time.time(), "reason": clippo.reason(res or {})})
+        if ok_items:
+            await clippo.submit(camp["ext_id"], ok_items)
+            for cid, platform in ok_keys:
+                c = db.one("SELECT submitted FROM clips WHERE id=?", (cid,))
+                sub = db.jload(c["submitted"], {}) or {}
+                sub[platform] = time.time()
+                db.update("clips", cid, {"submitted": db.jdump(sub)})
+                db.kv_set(f"clippo_check:{cid}:{platform}", {"at": time.time(), "reason": ""})
+            sent += len(ok_items)
+            db.event(f"Submitted {len(ok_items)} clip link(s) to Clippo: {camp['title'][:60]}", "campaign")
+            await push.send(f"🎯 Submitted {len(ok_items)} clip(s) to Clippo", camp["title"][:90], url="/#campaigns",
+                            tag=f"sub{camp['id']}")
+    return sent
+
+
 async def refresh(notify: bool = True) -> int:
     first_run = not db.one("SELECT 1 FROM campaigns LIMIT 1")
     new = upsert(await fetch_clippo(), "clippo")
+    try:
+        await sync_joined()
+    except Exception as e:  # noqa: BLE001 - the public list must refresh even if the session expired
+        log.warning("clippo joined sync: %s", e)
     db.kv_set("campaigns_refreshed", time.time())
     if notify and not first_run:
         for c in new[:5]:

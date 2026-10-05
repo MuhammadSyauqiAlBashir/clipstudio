@@ -388,12 +388,12 @@ def clip_out(c: dict, src: dict | None = None) -> dict:
 
 
 @app.get("/api/clips")
-async def clips(status: str = "review", s: Session = Depends(current)):
+async def clips(status: str = "review", order: str = "", s: Session = Depends(current)):
     groups = {"review": ("review",), "approved": ("approved", "rendering", "ready"), "posted": ("posted",),
               "rejected": ("rejected", "expired")}
     sts = groups.get(status, (status,))
     marks = ",".join("?" for _ in sts)
-    order = "score DESC" if status == "review" else "updated_at DESC"
+    order = ("source_id, start" if order == "source" else "score DESC") if status == "review" else "updated_at DESC"
     rows = db.all(f"SELECT * FROM clips WHERE status IN ({marks}) ORDER BY {order} LIMIT 200", sts)
     counts = {r["status"]: r["n"] for r in db.all("SELECT status, COUNT(*) n FROM clips GROUP BY status")}
     return {"clips": [clip_out(c) for c in rows], "counts": counts}
@@ -566,7 +566,9 @@ async def list_campaigns(show: str = "open", s: Session = Depends(current)):
              "hidden": "hidden=1", "all": "1=1"}.get(show, "status='open' AND hidden=0")
     rows = db.all(f"SELECT * FROM campaigns WHERE {where} ORDER BY joined DESC, (status='open') DESC, rate DESC, "
                   "budget_used ASC")
-    return {"campaigns": [campaign_out(r) for r in rows], "refreshed": db.kv_get("campaigns_refreshed", 0) or 0}
+    from . import clippo
+    return {"campaigns": [campaign_out(r) for r in rows], "refreshed": db.kv_get("campaigns_refreshed", 0) or 0,
+            "clippo_connected": clippo.configured()}
 
 
 @app.post("/api/campaigns/refresh")
@@ -597,6 +599,33 @@ async def edit_campaign(cid: int, body: CampaignEdit, s: Session = Depends(curre
     data = {k: (int(v) if isinstance(v, bool) else v) for k, v in body.model_dump().items() if v is not None}
     db.update("campaigns", cid, data)
     return {"campaign": campaign_out(get_campaign(cid))}
+
+
+@app.post("/api/campaigns/{cid}/join")
+async def join_campaign(cid: int, s: Session = Depends(current)):
+    """Join on the platform as the owner (Clippo), then mark it joined here."""
+    from . import clippo
+    r = get_campaign(cid)
+    if r["platform"] != "clippo" or not clippo.configured():
+        raise HTTPException(400, "Joining from here works for Clippo once its session is saved.")
+    try:
+        await clippo.join(r["ext_id"])
+    except clippo.ClippoError as e:
+        if "already" not in str(e).lower():
+            raise HTTPException(e.status if e.status in (400, 401, 403, 409) else 502, str(e)) from e
+    db.update("campaigns", cid, {"joined": 1})
+    db.event(f"Joined Clippo campaign: {r['title'][:80]}", "campaign")
+    return {"campaign": campaign_out(get_campaign(cid))}
+
+
+@app.post("/api/campaigns/submit-now")
+async def campaigns_submit_now(s: Session = Depends(current)):
+    from . import clippo
+    try:
+        n = await campaigns.auto_submit()
+    except clippo.ClippoError as e:
+        raise HTTPException(502, str(e)) from e
+    return {"submitted": n}
 
 
 @app.post("/api/campaigns/{cid}/clip")
@@ -630,7 +659,9 @@ async def campaign_submit_list(cid: int, s: Session = Depends(current)):
         posted, sub = db.jload(c["posted"], {}) or {}, db.jload(c["submitted"], {}) or {}
         for p, u in posted.items():
             if str(u).startswith("http"):
-                out.append({"clip_id": c["id"], "hook": c["hook"], "platform": p, "url": u, "submitted": sub.get(p, 0)})
+                chk = db.kv_get(f"clippo_check:{c['id']}:{p}") or {}
+                out.append({"clip_id": c["id"], "hook": c["hook"], "platform": p, "url": u, "submitted": sub.get(p, 0),
+                            "waiting": chk.get("reason", "") if not sub.get(p) else ""})
     return {"items": out}
 
 

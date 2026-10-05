@@ -122,6 +122,7 @@ async def watch_loop():
         await every("weekly", 300, autopilot.weekly_summary)
         await every("stats", 3600, autopilot.sync_all)
         await every("campaigns", 3 * 3600, campaigns.refresh)
+        await every("clippo_submit", 2 * 3600, campaigns.auto_submit)
         try:
             await asyncio.wait_for(stop.wait(), timeout=5)
         except asyncio.TimeoutError:

@@ -161,3 +161,17 @@ def test_browse_marks_added_and_blocks_duplicates(client, monkeypatch):
     assert client.post("/api/sources", json={"url": url, "permission": "implied"}).status_code == 200
     assert client.get("/api/browse/youtube?channel=UCabc").json()["videos"][0]["added"]["status"] == "queued"
     assert client.post("/api/sources", json={"url": "https://youtu.be/abcdefghijk", "permission": "implied"}).status_code == 409
+
+
+def test_review_order_by_source(client):
+    from cs import db
+    now = db.now()
+    s1 = db.insert("sources", {"title": "A", "created_at": now, "updated_at": now})
+    s2 = db.insert("sources", {"title": "B", "created_at": now, "updated_at": now})
+    for sid, start, score in ((s2, 50, 99), (s1, 300, 90), (s1, 20, 60)):
+        db.insert("clips", {"source_id": sid, "start": start, "end": start + 20, "score": score, "status": "review",
+                            "created_at": now, "updated_at": now})
+    by_score = [(c["source_id"], c["start"]) for c in client.get("/api/clips?status=review").json()["clips"]]
+    by_video = [(c["source_id"], c["start"]) for c in client.get("/api/clips?status=review&order=source").json()["clips"]]
+    assert by_score[0] == (s2, 50)
+    assert by_video == [(s1, 20), (s1, 300), (s2, 50)]

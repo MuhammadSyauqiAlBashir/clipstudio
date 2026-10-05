@@ -20,6 +20,7 @@ ASSETS = Path(__file__).parent / "assets"
 FONT_NAME = "Anton"
 
 COOKIES_FILE = Path(os.environ.get("CS_COOKIES_FILE", "/etc/clipstudio/youtube-cookies.txt"))
+SESSIONS_DIR = os.environ.get("CS_SESSIONS_DIR", "/etc/clipstudio/sessions")  # campaign-site sessions (owner's)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_FAST_MODEL = os.environ.get("CS_GEMINI_FAST_MODEL", "gemini-3.1-flash-lite")
