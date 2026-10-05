@@ -38,6 +38,8 @@ TIKTOK_CLIENT_KEY = os.environ.get("TIKTOK_CLIENT_KEY", "")  # sandbox keys unti
 TIKTOK_CLIENT_SECRET = os.environ.get("TIKTOK_CLIENT_SECRET", "")
 YT_OAUTH_CLIENT_ID = os.environ.get("YT_OAUTH_CLIENT_ID", "")   # Google OAuth web client (project clipstudio-ai)
 YT_OAUTH_CLIENT_SECRET = os.environ.get("YT_OAUTH_CLIENT_SECRET", "")
+FB_PAGE_ID = os.environ.get("FB_PAGE_ID", "")        # Facebook Page bashclipeveryday
+FB_PAGE_TOKEN = os.environ.get("FB_PAGE_TOKEN", "")  # Page token (never expires), made from FB_USER_TOKEN
 # Signs WebSub / EventSub deliveries. If unset, a random one is created in the state dir.
 WEBHOOK_SECRET = os.environ.get("CS_WEBSUB_SECRET", "")
 VAPID_SUBJECT = os.environ.get("CS_VAPID_SUBJECT", "mailto:admin@bashir.my.id")

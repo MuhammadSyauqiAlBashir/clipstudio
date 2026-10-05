@@ -17,12 +17,12 @@ from pathlib import Path
 
 import httpx
 
-from . import config, db, tiktok, youtube
+from . import config, db, facebook, tiktok, youtube
 from .posttext import post_caption
 
 log = logging.getLogger("cs.publish")
 
-PLATFORMS = ("instagram", "tiktok", "youtube")
+PLATFORMS = ("instagram", "facebook", "tiktok", "youtube")
 IG_API = "https://graph.instagram.com/v24.0"
 SPACING = 90  # seconds between two posts on the same platform
 
@@ -46,11 +46,14 @@ def connected(platform: str) -> bool:
         return tiktok.connected()
     if platform == "youtube":
         return youtube.connected()
+    if platform == "facebook":
+        return facebook.connected()
     return False
 
 
 def autopost_enabled(platform: str) -> bool:
-    return bool((db.settings().get("autopost") or {}).get(platform)) and connected(platform)
+    auto = {**db.DEFAULT_SETTINGS["autopost"], **(db.settings().get("autopost") or {})}
+    return bool(auto.get(platform)) and connected(platform)
 
 
 def post_times() -> list[tuple[int, int]]:
@@ -200,6 +203,24 @@ async def instagram(post: dict, clip: dict, caption: str):
     return media_id, url
 
 
+async def facebook_reel(post: dict, clip: dict, caption: str):
+    """Upload + publish a Reel on the Page, then wait until Facebook has finished it."""
+    if not post["remote_id"]:
+        vid = await facebook.start_and_upload(Path(clip["final"]))
+        set_post(post["id"], remote_id=vid, status="uploading")
+        await facebook.finish(vid, caption)
+        set_post(post["id"], status="processing")
+        raise Later(time.time() + 15, "Facebook is processing the reel")
+    st, pub, link = await facebook.status(post["remote_id"])
+    if st == "error":
+        raise PublishError("Facebook couldn't process the video.")
+    if st == "ready" and pub in ("complete", ""):
+        return post["remote_id"], link or f"https://www.facebook.com/reel/{post['remote_id']}"
+    if time.time() - post["updated_at"] > 1800:
+        raise PublishError("Facebook took more than 30 minutes to publish the reel.")
+    raise Later(time.time() + 15, "Facebook is processing the reel")
+
+
 async def youtube_short(post: dict, clip: dict, caption: str, src: dict):
     if post["remote_id"]:  # uploaded already (a retry after a crash): never upload twice
         return post["remote_id"], f"https://www.youtube.com/shorts/{post['remote_id']}"
@@ -253,12 +274,14 @@ async def run_one() -> bool:
             remote, url = await tiktok_draft(post, clip)
         elif post["platform"] == "youtube":
             remote, url = await youtube_short(post, clip, caption, src)
+        elif post["platform"] == "facebook":
+            remote, url = await facebook_reel(post, clip, caption)
         else:
             raise PublishError(f"{post['platform']} posting isn't set up yet")
     except Later as e:
         db.update("posts", post["id"], {"not_before": e.until})  # keeps updated_at = last real change
         return True
-    except (PublishError, tiktok.TikTokError, youtube.YouTubeError, httpx.HTTPError, OSError) as e:
+    except (PublishError, tiktok.TikTokError, youtube.YouTubeError, facebook.FacebookError, httpx.HTTPError, OSError) as e:
         attempts = post["attempts"] + 1
         if attempts < 3 and not isinstance(e, PublishError):
             set_post(post["id"], attempts=attempts, not_before=time.time() + 300 * attempts, error=str(e)[:300])

@@ -204,3 +204,34 @@ def test_youtube_connect_upload_and_limits(state, monkeypatch):
     assert len(calls) == 1
     db.usage_add("yt_uploads", youtube.DAILY_UPLOADS)
     assert youtube.uploads_left() == 0
+
+
+def test_facebook_reel_flow(state, monkeypatch):
+    from cs import config, db, facebook, publish
+    monkeypatch.setattr(config, "FB_PAGE_ID", "123")
+    monkeypatch.setattr(config, "FB_PAGE_TOKEN", "pt")
+    assert publish.autopost_enabled("facebook")  # on by default even with older saved settings
+    calls = []
+
+    async def up(path):
+        calls.append("upload")
+        return "v9"
+
+    async def fin(vid, desc, state="PUBLISHED"):
+        calls.append(("finish", state, "#reels" in desc))
+    seq = iter([("processing", "not_started", ""), ("ready", "complete", "https://www.facebook.com/reel/v9")])
+
+    async def stat(vid):
+        return next(seq)
+    monkeypatch.setattr(facebook, "start_and_upload", up)
+    monkeypatch.setattr(facebook, "finish", fin)
+    monkeypatch.setattr(facebook, "status", stat)
+    cid = make_clip(state)
+    db.execute("INSERT INTO posts(clip_id, platform, status, created_at, updated_at) VALUES(?,?,?,?,?)",
+               (cid, "facebook", "queued", db.now(), db.now()))
+    for _ in range(3):
+        db.execute("UPDATE posts SET not_before=0")
+        asyncio.run(publish.run_one())
+    p = db.one("SELECT * FROM posts WHERE platform='facebook'")
+    assert p["status"] == "done" and p["url"].endswith("/reel/v9")
+    assert calls == ["upload", ("finish", "PUBLISHED", True)]  # uploaded once, published once

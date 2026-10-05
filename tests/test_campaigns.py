@@ -42,7 +42,10 @@ def test_normalize_and_flags():
     assert campaigns.youtube_footage(c) == ["https://www.youtube.com/watch?v=abcdefghijk"]
     fb = campaigns.normalize_clippo({**RAW, "id": "c2", "title": "Bunda", "requirementsV2": "", "platformSupported": [2],
                                      "budgetPercentage": 10})
-    assert fb["flags"] == ["other_platforms"]
+    assert fb["flags"] == [] and fb["platforms"] == ["facebook"]  # Facebook is one of the owner's platforms now
+    other = campaigns.normalize_clippo({**RAW, "id": "c3", "title": "X", "requirementsV2": "", "platformSupported": [7],
+                                        "budgetPercentage": 10})
+    assert other["flags"] == ["other_platforms"]
 
 
 def test_upsert_keeps_ended_and_reports_new(monkeypatch):

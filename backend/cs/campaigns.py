@@ -19,7 +19,7 @@ log = logging.getLogger("cs.campaigns")
 CLIPPO_LIST = "https://api.clippo.id/v1/campaigns"
 CLIPPO_PAGE = "https://app.clippo.id/campaigns/{id}"
 CLIPPO_PLATFORMS = {0: "tiktok", 1: "instagram", 2: "facebook"}
-MY_PLATFORMS = {"tiktok", "instagram", "youtube"}
+MY_PLATFORMS = {"tiktok", "instagram", "youtube", "facebook"}
 
 
 def plain(html_text: str) -> str:
