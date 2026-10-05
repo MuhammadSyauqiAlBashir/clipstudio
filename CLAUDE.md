@@ -197,3 +197,8 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   it continues by itself (Groq daily allowance → after 00:00 WIB, Gemini → retry time, retries "try n of 3"), what is
   already done ("Download done ✓"), place in line, paused, failed/refused with the reason. Final-render and posting rows
   say the same kind of thing. `config.MAX_JOB_ATTEMPTS`. 47 tests.
+- 2026-10-05 22:20 — Camera movement fix (owner: "movement is laggy", clip 109). Cause: the crop moved only 15×/s
+  (17–46 px jump, then 1–2 frozen frames) and the 4 fps face path changed speed every 0.25 s / wobbled. Now
+  `render.calm_path` (shots split at cuts, dead zone 10% of the crop width, Gaussian ~0.35 s) + Catmull-Rom → one crop
+  update per source frame, 1-px steps (`crop exact=1`). Measured on clip 62: old 46 px/freeze/freeze, new steady
+  3–6 px per frame. Render-time only, so it applies to all new previews and finals (saved plans reused).

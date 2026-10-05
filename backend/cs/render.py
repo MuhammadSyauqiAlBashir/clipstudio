@@ -3,6 +3,7 @@ Preview: 540x960 ultrafast (for review). Final: 1080x1920 (only after the owner 
 
 from __future__ import annotations
 
+import math
 import subprocess
 from pathlib import Path
 
@@ -14,26 +15,65 @@ QUALITY = {
 }
 
 
-def sendcmd_lines(path: list[tuple[float, int]], step: float = 1 / 15) -> str:
-    """Crop x commands, linearly interpolated between the 4 fps samples so the pan is smooth."""
+def calm_path(path: list[tuple[float, int]], crop_w: int) -> list[list[tuple[float, float]]]:
+    """The 4 fps face path → a calm camera, split into shots at cuts. Inside a shot the camera holds still while the
+    face moves a little (dead zone), and moves are spread over ~1 s with a Gaussian, so a pan eases in and out
+    instead of changing speed every 0.25 s or wobbling back and forth."""
     if not path:
+        return []
+    dead, jump = 0.10 * crop_w, 0.30 * crop_w
+    shots: list[list[tuple[float, float]]] = [[(path[0][0], float(path[0][1]))]]
+    for (_, xa), (t, xb) in zip(path, path[1:]):
+        if abs(xb - xa) > jump:  # a cut or speaker change: new shot, the camera jumps
+            shots.append([])
+        shots[-1].append((t, float(xb)))
+    out = []
+    for shot in shots:
+        ts = [t for t, _ in shot]
+        held, cur = [], shot[0][1]
+        for _, x in shot:
+            if abs(x - cur) > dead:
+                cur = x
+            held.append(cur)
+        dt = (ts[-1] - ts[0]) / (len(ts) - 1) if len(ts) > 1 else 0.25
+        sigma = max(0.5, 0.35 / max(dt, 1e-3))  # ≈0.35 s
+        r = int(3 * sigma)
+        k = [math.exp(-(i * i) / (2 * sigma * sigma)) for i in range(-r, r + 1)]
+        n = len(held)
+        smooth = [sum(k[j + r] * held[min(max(i + j, 0), n - 1)] for j in range(-r, r + 1)) / sum(k) for i in range(n)]
+        out.append(list(zip(ts, smooth)))
+    return out
+
+
+def sendcmd_lines(path: list[tuple[float, int]], crop_w: int = 608, fps: float = 30) -> str:
+    """Crop x for every source frame (exactly one update per frame, so pans glide instead of stepping): the calm path,
+    interpolated with Catmull-Rom curves (no speed jumps between the 4 fps samples)."""
+    shots = calm_path(path, crop_w)
+    if not shots:
         return ""
     lines = []
     t_end = path[-1][0]
-    i = 0
-    t = 0.0
-    while t <= t_end + 1e-6:
-        while i + 1 < len(path) and path[i + 1][0] <= t:
+    fps = min(max(float(fps or 30), 1.0), 120.0)
+    si = 0
+    for k in range(int(t_end * fps) + 1):
+        t = k / fps
+        while si + 1 < len(shots) and shots[si + 1][0][0] <= t:
+            si += 1
+        pts = shots[si]
+        i = 0
+        while i + 1 < len(pts) and pts[i + 1][0] <= t:
             i += 1
-        t0, x0 = path[i]
-        if i + 1 < len(path):
-            t1, x1 = path[i + 1]
-            # jumps (cuts) stay jumps; small moves glide
-            x = x0 if abs(x1 - x0) > 120 else x0 + (x1 - x0) * max(0.0, min(1.0, (t - t0) / max(1e-6, t1 - t0)))
+        if i + 1 >= len(pts) or t < pts[0][0]:
+            x = pts[i][1]
         else:
-            x = x0
-        lines.append(f"{t:.3f} crop x {int(x) - int(x) % 2};")
-        t += step
+            p0, p1, p2 = pts[max(i - 1, 0)][1], pts[i][1], pts[i + 1][1]
+            p3 = pts[min(i + 2, len(pts) - 1)][1]
+            u = (t - pts[i][0]) / max(1e-6, pts[i + 1][0] - pts[i][0])
+            x = 0.5 * (2 * p1 + (p2 - p0) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u * u
+                       + (3 * p1 - p0 - 3 * p2 + p3) * u ** 3)
+            x = min(max(x, min(p1, p2)), max(p1, p2))  # never overshoot past the samples
+        # sent half a frame early so it lands on frame k; 1-px steps (crop exact=1) keep slow glides smooth
+        lines.append(f"{max(0.0, (k - 0.5) / fps):.4f} crop x {int(round(x))};")
     return "\n".join(lines) + "\n"
 
 
@@ -42,9 +82,9 @@ def video_filter(plan: dict, q: dict, work: Path) -> str:
     lay = plan["layout"]
     if lay == "track":
         cmd = work / "crop.cmd"
-        cmd.write_text(sendcmd_lines(plan["path"]))
+        cmd.write_text(sendcmd_lines(plan["path"], plan["crop_w"], plan.get("fps") or 30))
         x0 = plan["path"][0][1] if plan["path"] else 0
-        v = (f"[0:v]sendcmd=f={cmd.name},crop=w={plan['crop_w']}:h={plan['src_h']}:x={x0}:y=0,"
+        v = (f"[0:v]sendcmd=f={cmd.name},crop=w={plan['crop_w']}:h={plan['src_h']}:x={x0}:y=0:exact=1,"
              f"scale={W}:{H}:flags=bicubic,setsar=1[v0]")
     elif lay == "split":
         (ax, ay, aw, ah), (bx, by, bw, bh) = plan["boxes"]
