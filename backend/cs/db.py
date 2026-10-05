@@ -212,6 +212,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "post_times": "12:00, 18:00, 21:00",
     "reminder_time": "19:00",       # daily push: clips waiting for review + how long the queue lasts
     "weekly_summary": True,         # Monday 09:00 push with last week's numbers
+    "auto_submit": True,            # submit posted campaign clips to Clippo when Clippo says they're eligible
 }
 
 _lock = threading.RLock()

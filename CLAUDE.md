@@ -167,3 +167,12 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   insights would need read_insights) and YouTube (views, 45 days; private-lock check); "Sync now" button. TikTok views
   need the `video.list` scope (another TikTok review) — manual until then. Watched channels: "➕ Add videos" opens
   Browse on that channel with its permission. 41 tests.
+- 2026-10-05 13:10 — Clippo as the owner's account (owner's decision; session switched to normal mode for approval):
+  owner's browser requests saved as `/etc/clipstudio/sessions/{clippo,trybuzzer,whop}.curl` (root:clipstudio 640;
+  originals shredded; `session-*.txt` git-ignored). `backend/cs/clippo.py` uses Clippo's own web calls via
+  `app.clippo.id/api/proxy/`: join `clips/clipper/campaign/join {campaignId}`, `bulk-check {campaignId, videoUrls}`,
+  `submit-batch {campaignId, clips[]}`; sends the copied browser headers as-is (Cloudflare). Join button in the
+  Campaigns sheet, auto-submit every 2 h (only platforms the campaign accepts; not-yet-eligible links retried 14 days;
+  reasons shown), "Submit now". Session expiry → 401 → owner copies a fresh request. TryBuzzer/Whop: sessions saved,
+  integration not built yet (TryBuzzer copy was a public endpoint; needs a user request + its refresh token).
+  Review page grouped by source video in time order (toggle "By score"). 43 tests.

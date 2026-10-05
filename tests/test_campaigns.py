@@ -92,3 +92,47 @@ def test_campaign_flow_hashtags_and_submit():
         assert c.get("/api/campaigns?show=open").json()["campaigns"] == []
         assert len(c.get("/api/campaigns?show=hidden").json()["campaigns"]) == 1
     main.app.dependency_overrides.clear()
+
+
+def test_clippo_join_and_auto_submit(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from cs import campaigns, clippo, db, main
+    campaigns.upsert([campaigns.normalize_clippo({**RAW, "requirementsV2": "", "budgetPercentage": 10})], "clippo")
+    camp = db.one("SELECT * FROM campaigns")
+    monkeypatch.setattr(clippo, "configured", lambda: True)
+    joined, submitted = [], []
+
+    async def fake_join(ext):
+        joined.append(ext)
+        return {"status": 200}
+
+    async def fake_check(ext, urls):
+        return [{"success": True, "data": {"platform": "INSTAGRAM", "caption": "cap", "postedAt": "2026-10-05T00:00:00Z",
+                                           "video": {"thumbnailUrl": "t"}, "eligibility": {"eligible": "ig" in u}}}
+                for u in urls]
+
+    async def fake_submit(ext, items):
+        submitted.extend(items)
+        return {"status": 200}
+    monkeypatch.setattr(clippo, "join", fake_join)
+    monkeypatch.setattr(clippo, "bulk_check", fake_check)
+    monkeypatch.setattr(clippo, "submit", fake_submit)
+    main.app.dependency_overrides[main.current] = lambda: main.Session({"username": "bashirsyauqi"}, "t")
+    with TestClient(main.app, headers={"X-CS": "1"}) as c:
+        assert c.post(f"/api/campaigns/{camp['id']}/join").json()["campaign"]["joined"] == 1
+        assert joined == ["c1"]
+        now = db.now()
+        sid = db.insert("sources", {"campaign_id": camp["id"], "created_at": now, "updated_at": now})
+        cid = db.insert("clips", {"source_id": sid, "start": 0, "end": 20, "status": "posted", "created_at": now,
+                                  "updated_at": now,
+                                  "posted": '{"instagram": "https://instagram.com/reel/ig1", "tiktok": "https://tiktok.com/v/x2", "youtube": "https://youtu.be/no"}'})
+        assert asyncio.run(campaigns.auto_submit()) == 1
+        assert [i["videoUrl"] for i in submitted] == ["https://instagram.com/reel/ig1"]  # youtube isn't a campaign platform
+        assert submitted[0]["clipTitle"] == "cap" and submitted[0]["thumbnailUrl"] == "t"
+        sub = db.jload(db.one("SELECT submitted FROM clips WHERE id=?", (cid,))["submitted"])
+        assert "instagram" in sub and "tiktok" not in sub
+        items = {i["platform"]: i for i in c.get(f"/api/campaigns/{camp['id']}/submit").json()["items"]}
+        assert items["tiktok"]["waiting"] and not items["instagram"]["waiting"]
+        assert asyncio.run(campaigns.auto_submit()) == 0  # never twice
+    main.app.dependency_overrides.clear()

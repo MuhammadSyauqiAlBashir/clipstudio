@@ -188,15 +188,27 @@ function editSheet(c, onDone) {
 // Review
 // ---------------------------------------------------------------------------------------------------------
 async function reviewPage(view) {
-  const { clips } = await api("/clips?status=review")
-  view.append(el("div", { class: "topbar" }, el("h1", { text: "Review" }), el("span", { class: "muted small", text: `${clips.length} waiting` })))
+  const bySource = (localStorage.getItem("reviewOrder") || "source") === "source"
+  const { clips } = await api(`/clips?status=review${bySource ? "&order=source" : ""}`)
+  const toggle = el("div", { class: "seg" }, [["source", "By video (in order)"], ["score", "By score"]].map(([k, l]) =>
+    el("button", { class: `btn sm ${(bySource ? "source" : "score") === k ? "on" : ""}`, type: "button", text: l, onclick: () => { try { localStorage.setItem("reviewOrder", k) } catch (_) {} render() } })))
+  view.append(el("div", { class: "topbar" }, el("h1", { text: "Review" }), el("span", { class: "muted small", text: `${clips.length} waiting` })), toggle)
   if (!clips.length) {
     view.append(el("div", { class: "empty" }, el("b", { text: "🍿" }), "Nothing to review yet.", el("br"),
       el("a", { href: "#sources", text: "Add a video link" })))
     return
   }
   view.append(el("p", { class: "muted small", style: { marginTop: 0 }, text: "Low-quality previews. Approving makes the 1080×1920 version." }))
-  for (const c of clips) view.append(reviewCard(c, render))
+  let lastSource = null
+  for (const c of clips) {
+    if (bySource && c.source_id !== lastSource) {
+      lastSource = c.source_id
+      view.append(el("h2", { class: "ellipsis", text: `${PLATFORM_ICON[c.source.platform] || "🎞"} ${c.source.title || "Video"}` }))
+    }
+    const card = reviewCard(c, render)
+    if (bySource) card.querySelector(".hook").prepend(el("span", { class: "chip", style: { marginRight: "6px" }, text: `⏱ ${mmss(c.start)}` }))
+    view.append(card)
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -483,9 +495,13 @@ const rp = (n) => "Rp" + new Intl.NumberFormat("id-ID").format(n || 0)
 async function campaignsPage(view) {
   const show = sessionStorage.getItem("campShow") || "open"
   const r = await api(`/campaigns?show=${show}`)
+  clippoConnected = !!r.clippo_connected
   const refresh = el("button", { class: "btn sm", type: "button", text: "↻ Refresh" })
   refresh.onclick = () => busy(refresh, async () => { const x = await api("/campaigns/refresh", { method: "POST" }); toast(x.new ? `${x.new} new campaign(s)` : "Up to date"); render() }).catch(() => {})
-  view.append(el("div", { class: "topbar" }, el("h1", { text: "Campaigns" }), refresh),
+  const submitNow = el("button", { class: "btn sm", type: "button", text: "📤 Submit now" })
+  submitNow.onclick = () => busy(submitNow, async () => { const x = await api("/campaigns/submit-now", { method: "POST" }); toast(x.submitted ? `Submitted ${x.submitted} clip(s)` : "Nothing eligible yet") }).catch(() => {})
+  view.append(el("div", { class: "topbar" }, el("h1", { text: "Campaigns" }), el("div", { class: "row" }, r.clippo_connected ? submitNow : null, refresh)),
+    r.clippo_connected ? el("p", { class: "hint", style: { marginTop: 0 }, text: "🔗 Clippo account connected: Join works from here, and posted clips are checked with Clippo and submitted automatically every 2 hours once eligible." }) : null,
     el("div", { class: "seg" }, [["open", "Open"], ["joined", "Joined"], ["ended", "Ended"], ["hidden", "Hidden"], ["all", "All"]].map(([k, l]) =>
       el("button", { class: `btn sm ${k === show ? "on" : ""}`, type: "button", text: l, onclick: () => { sessionStorage.setItem("campShow", k); render() } }))),
     el("p", { class: "hint", style: { marginTop: 0 }, text: `Clippo's public list, checked every 3 hours${r.refreshed ? ` (last ${ago(r.refreshed)})` : ""}. Join in Clippo's app; Clip Studio does the clipping, hashtags and the links to submit.` }))
@@ -510,6 +526,8 @@ async function campaignsPage(view) {
   }
 }
 
+let clippoConnected = false
+
 async function campaignSheet(c) {
   const { body, close } = sheet(c.title, { onClose: render })
   const yt = c.footage.filter((f) => /youtube\.com\/watch|youtu\.be\/|youtube\.com\/shorts\//.test(f.url))
@@ -531,7 +549,11 @@ async function campaignSheet(c) {
     el("div", { class: "row wrap", style: { gap: "5px" } }, el("span", { class: "chip accent", text: `${rp(c.rate)} / 1k views` }), c.platforms.map((p) => el("span", { class: "chip", text: p })),
       el("span", { class: "chip", text: `budget used ${Math.round(c.budget_used)}%` }), el("span", { class: "chip", text: `${c.clippers.toLocaleString()} clippers` })),
     c.flags.length ? el("div", { class: "col", style: { gap: "4px", margin: "10px 0" } }, c.flags.map((f) => el("span", { class: `chip ${(FLAG[f] || ["", ""])[1]}`, style: { alignSelf: "flex-start" }, text: (FLAG[f] || [f])[0] }))) : null,
-    el("div", { class: "btns" }, el("a", { class: "btn primary", href: c.url, target: "_blank", rel: "noopener", text: "Join in Clippo ↗" })),
+    el("div", { class: "btns" },
+      clippoConnected && c.platform === "clippo" && !c.joined
+        ? el("button", { class: "btn primary", type: "button", text: "✅ Join this campaign", onclick: (e) => busy(e.target, async () => { await api(`/campaigns/${c.id}/join`, { method: "POST" }); toast("Joined on Clippo ✅"); close() }).catch(() => {}) })
+        : null,
+      el("a", { class: "btn", href: c.url, target: "_blank", rel: "noopener", text: "Open in Clippo ↗" })),
     el("label", { class: "switch", style: { margin: "10px 0" } }, joined, "I joined this campaign"),
     el("h2", { text: "Brief" }), el("pre", { class: "caption", text: c.brief || "(no brief)" }),
     el("h2", { text: "Required hashtags" }),
@@ -551,7 +573,8 @@ async function campaignSheet(c) {
   const pending = items.filter((i) => !i.submitted)
   sub.replaceChildren(items.length ? [
     ...items.map((i) => el("div", { class: "row small", style: { borderBottom: "1px solid var(--line)", padding: "5px 0" } },
-      el("span", { class: "grow ellipsis" }, `${i.submitted ? "✓ " : ""}${i.platform}: `, el("a", { href: i.url, target: "_blank", rel: "noopener", text: i.url.replace(/^https?:\/\//, "").slice(0, 45) })))),
+      el("span", { class: "grow ellipsis" }, `${i.submitted ? "✓ " : ""}${i.platform}: `, el("a", { href: i.url, target: "_blank", rel: "noopener", text: i.url.replace(/^https?:\/\//, "").slice(0, 45) }),
+        i.waiting ? el("div", { class: "muted", text: `⏳ ${i.waiting}` }) : null))),
     pending.length ? el("div", { class: "btns" },
       el("button", { class: "btn", type: "button", text: `Copy ${pending.length} link(s)`, onclick: async () => { try { await navigator.clipboard.writeText(pending.map((i) => i.url).join("\n")); toast("Copied — paste them in Clippo") } catch (_) {} } }),
       el("button", { class: "btn good", type: "button", text: "Mark submitted", onclick: async (e) => { await busy(e.target, () => api(`/campaigns/${c.id}/submitted`, { method: "POST", json: { items: pending.map((i) => ({ clip_id: i.clip_id, platform: i.platform })) } })).catch(() => {}); close() } })) : el("div", { class: "muted small", text: "All submitted." }),
