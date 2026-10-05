@@ -6,7 +6,7 @@ import re
 
 from . import db
 
-PLATFORM_TAGS = {"tiktok": "", "youtube": " #shorts", "instagram": " #reels"}
+PLATFORM_TAGS = {"tiktok": "", "youtube": " #shorts", "instagram": " #reels", "facebook": " #reels"}
 
 
 def post_caption(c: dict, src: dict, platform: str = "tiktok") -> str:

@@ -22,7 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from . import campaigns, config, db, fetch, gate, kick, pipeline, publish, push, tiktok, twitch, youtube, yt
+from . import campaigns, config, db, facebook, fetch, gate, kick, pipeline, publish, push, tiktok, twitch, youtube, yt
 from .posttext import PLATFORM_TAGS, post_caption
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -465,7 +465,7 @@ async def reject(cid: int, body: RejectIn, s: Session = Depends(current)):
 
 
 class PostedIn(BaseModel):
-    platform: str = Field(pattern="^(tiktok|youtube|instagram)$")
+    platform: str = Field(pattern="^(tiktok|youtube|instagram|facebook)$")
     url: str = Field("", max_length=300)
 
 
@@ -481,7 +481,7 @@ async def posted(cid: int, body: PostedIn, s: Session = Depends(current)):
 
 
 class ViewsIn(BaseModel):
-    platform: str = Field(pattern="^(tiktok|youtube|instagram)$")
+    platform: str = Field(pattern="^(tiktok|youtube|instagram|facebook)$")
     views: int = Field(ge=0, le=10_000_000_000)
 
 
@@ -650,7 +650,7 @@ async def campaign_submitted(cid: int, body: SubmittedIn, s: Session = Depends(c
 
 
 class PublishIn(BaseModel):
-    platform: str = Field(pattern="^(tiktok|youtube|instagram)$")
+    platform: str = Field(pattern="^(tiktok|youtube|instagram|facebook)$")
 
 
 @app.post("/api/clips/{cid}/publish")
@@ -694,7 +694,19 @@ async def accounts(s: Session = Depends(current)):
     tok = db.kv_get("ig_token", {}) or {}
     ig["expires"] = tok.get("expires", 0)
     ta = tiktok.auth()
-    out = {"instagram": ig,
+    fb = {"connected": facebook.connected(), "username": "", "error": "",
+          "note": "Reels on your Facebook Page (works without review)."}
+    if fb["connected"]:
+        cached = db.kv_get("fb_page", {}) or {}
+        if cached.get("at", 0) > time.time() - 3600:
+            fb["username"] = cached.get("name", "")
+        else:
+            try:
+                fb["username"] = (await facebook.page_info()).get("name", "")
+                db.kv_set("fb_page", {"name": fb["username"], "at": time.time()})
+            except (facebook.FacebookError, httpx.HTTPError) as e:
+                fb["error"] = str(e)[:200]
+    out = {"instagram": ig, "facebook": fb,
            "tiktok": {"connected": tiktok.connected(), "username": ta.get("display_name", ""), "error": "",
                       "can_connect": tiktok.configured(),
                       "note": "Approved clips go to your TikTok inbox as drafts; you post them in the TikTok app."},
@@ -764,7 +776,7 @@ async def youtube_disconnect(s: Session = Depends(current)):
 
 
 class AutopostIn(BaseModel):
-    platform: str = Field(pattern="^(tiktok|youtube|instagram)$")
+    platform: str = Field(pattern="^(tiktok|youtube|instagram|facebook)$")
     on: bool
 
 

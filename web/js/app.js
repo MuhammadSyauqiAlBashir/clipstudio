@@ -260,7 +260,7 @@ async function openClip(id) {
   } else if (c.status === "approved" || c.status === "rendering") {
     body.append(el("p", { class: "muted", text: "The full-quality version is being made. You'll get a notification." }))
   }
-  for (const [p, label] of [["tiktok", "TikTok"], ["youtube", "YouTube Shorts"], ["instagram", "Instagram Reels"]]) {
+  for (const [p, label] of [["tiktok", "TikTok"], ["youtube", "YouTube Shorts"], ["instagram", "Instagram Reels"], ["facebook", "Facebook Reels"]]) {
     const copy = el("button", { class: "btn sm", type: "button", text: "Copy" })
     copy.onclick = async () => { try { await navigator.clipboard.writeText(c.captions[p]); toast(`${label} caption copied`) } catch (_) { toast("Copy failed — long-press the text", "bad") } }
     const mark = el("button", { class: "btn sm", type: "button", text: c.posted[p] ? "✓ Posted" : "Mark posted" })
@@ -283,7 +283,8 @@ async function openClip(id) {
       el("div", { class: "row" }, el("b", { class: "grow", text: label }), canPost ? pub : null, copy, c.has_final && !(post && post.status === "done" && p !== "tiktok") ? mark : null),
       st ? el("div", { class: "small", style: { marginTop: "4px", color: post.status === "failed" ? "var(--bad)" : "inherit" } }, st,
         post.url ? el("span", {}, " · ", el("a", { href: post.url, target: "_blank", rel: "noopener", text: "open" })) : null,
-        views !== undefined ? ` · 👁 ${views.toLocaleString()} views` : "") : null,
+        views !== undefined ? ` · 👁 ${views.toLocaleString()} views` : "",
+        post.stats && post.stats.locked ? el("div", { style: { color: "var(--bad)" }, text: "🔒 YouTube locked it as private (Google's audit not passed yet) — share it from the phone" }) : null) : null,
       el("pre", { class: "caption", text: c.captions[p] })))
   }
   const edit = el("button", { class: "btn", type: "button", text: "✏️ Edit text" })
@@ -562,7 +563,7 @@ async function campaignSheet(c) {
 async function statsPage(view) {
   const days = +(sessionStorage.getItem("statsDays") || 30)
   const r = await api(`/stats?days=${days}`)
-  const names = { instagram: "Instagram", tiktok: "TikTok", youtube: "YouTube" }
+  const names = { instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok", youtube: "YouTube" }
   view.append(el("h1", { text: "Stats" }),
     el("div", { class: "seg" }, [7, 30, 90].map((d) => el("button", { class: `btn sm ${d === days ? "on" : ""}`, type: "button", text: `${d} days`, onclick: () => { sessionStorage.setItem("statsDays", d); render() } }))),
     el("div", { class: "card" }, el("dl", { class: "kv" },
@@ -672,7 +673,7 @@ async function morePage(view) {
   view.append(el("h1", { text: "More" }), el("a", { class: "btn", href: "#channels", style: { width: "100%", marginBottom: "12px" }, text: "📡 Watched channels" }), el("div", { class: "card col" }, pushBtn,
     el("p", { class: "hint", style: { margin: 0 }, text: "On iPhone: open this site in Safari → Share → Add to Home Screen, open it from the Home Screen, then tap the button." })))
   const { accounts } = await api("/accounts")
-  const names = { instagram: "Instagram Reels", tiktok: "TikTok", youtube: "YouTube Shorts" }
+  const names = { instagram: "Instagram Reels", facebook: "Facebook Reels", tiktok: "TikTok", youtube: "YouTube Shorts" }
   view.append(el("h2", { text: "Auto-posting" }), el("div", { class: "card col" },
     el("p", { class: "hint", style: { margin: 0 }, text: "After you approve a clip and its full-quality video is ready, it's posted to the platforms switched on here." }),
     Object.entries(accounts).map(([k, a]) => {

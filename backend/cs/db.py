@@ -205,7 +205,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
                          "sinetron, ftv",
     "max_source_hours": config.MAX_SOURCE_HOURS,
     "auto_max_age_hours": 48,
-    "autopost": {"instagram": True, "tiktok": True, "youtube": False},
+    "autopost": {"instagram": True, "facebook": True, "tiktok": True, "youtube": False},
     # Posting schedule (WIB): approved clips wait in a queue and go out one per slot per platform.
     "schedule_on": True,
     "post_times": "12:00, 18:00, 21:00",

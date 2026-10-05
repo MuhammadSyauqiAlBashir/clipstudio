@@ -97,6 +97,7 @@ the .jsonl).
 | Dev | `.venv` in the repo; `~/work/clipstudio-dev/dev.sh <script.py>` runs with the real keys against `~/work/clipstudio-dev/state`, capped like the worker. (Don't use `~/work/cs-dev`: it belongs to another project.) |
 | Auto-posting | `backend/cs/publish.py`: table `posts` (one row per clip+platform, idempotent), worker loop posts one at a time, ≥90 s apart per platform. Instagram: Meta app `bashclipeveryday` (dev mode, @bashclipeveryday as Instagram Tester, Instagram Login), `IG_ACCESS_TOKEN` seed in env, refreshed daily into DB `kv.ig_token` (60 days); Instagram fetches the final from a signed link `/api/pub/<clip>/<exp>/<sig>.mp4` (1 h, only while a post is pending; resumable upload needs Facebook Login). Settings `autopost` per platform (YouTube off by default) |
 | Campaigns | `backend/cs/campaigns.py`: Clippo's **public** list (`api.clippo.id/v1/campaigns`, no login) every 3 h into table `campaigns` (ended ones kept, marked `ended`); flags needs_audio / custom_edit / budget_low / other_platforms / product_cart; push on new campaigns. `sources.campaign_id` → required hashtags first in captions; "Clip it" imports YouTube footage; submit list per campaign (`clips.submitted`). Joining/submitting happen in Clippo's own app: automating the owner's logged-in Clippo account was **blocked by Claude Code's safety check** (even with the owner's `Bash(curl:*)` rule) — not built. AyoKlip/TryBuzzer: no public list; Konten.com check was blocked. CSP img-src also allows `flml.sgp1.cdn.digitaloceanspaces.com` (Caddyfile backup `~/work/Caddyfile.bak-20261005-000140`) |
+| Facebook | Page **Bashclipeveryday** (id 1421021257755722). `FB_PAGE_TOKEN` (never expires, made 2026-10-05 from the owner's long-lived `FB_USER_TOKEN` via `/me/accounts`) + `FB_PAGE_ID` in the env file. `backend/cs/facebook.py`: video_reels start → rupload → finish(PUBLISHED); auto-post on by default. Meta app in dev mode (owner = admin), no review |
 | Policy pages | `https://clips.bashir.my.id/privacy.html`, `/terms.html` (contact bashclip.everyday@gmail.com), icon `/icons/icon-1024.png` |
 | Checks | `systemctl is-active clipstudio clipstudio-worker`; `journalctl -u clipstudio-worker -f`; More tab in the app shows worker, queue, quotas, disk, keys, activity |
 
@@ -154,3 +155,7 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   scope youtube.upload, redirect `/api/youtube/oauth`). Built Connect YouTube + resumable Shorts upload
   (`backend/cs/youtube.py`, 1,600 units each, max 5/day, never twice per clip). Auto-post to YouTube stays OFF until
   Google's audit (uploads are locked private before that). Next: owner connects, one test upload, audit form. 38 tests.
+- 2026-10-05 09:10 — Facebook Reels: owner created the Page + token; permanent Page token derived on the server;
+  draft upload tested (processed, deleted). Facebook is the 4th auto-post platform (default on). YouTube test Short
+  went public (https://www.youtube.com/shorts/dqwNGKmUPTs); visibility watcher added (push if Google locks one).
+  YouTube API quota: 5 uploads/day cap is ours (10,000 units, 1,600 per upload). 40 tests pass.

@@ -13,7 +13,7 @@ from datetime import datetime
 
 import httpx
 
-from . import config, db, publish, push
+from . import config, db, publish, push, yt
 
 log = logging.getLogger("cs.autopilot")
 
@@ -100,6 +100,29 @@ async def weekly_summary():
     best = f" Best: “{s['best']['hook'][:40]}” ({s['best']['views']:,} views)." if s["best"] and s["best"]["views"] else ""
     await push.send("📈 Last week", f"{s['posts']} posts ({', '.join(parts)}), {s['views']:,} views.{best}",
                     url="/#stats", tag="weekly")
+
+
+async def youtube_visibility():
+    """Google locks uploads from unaudited apps as private, sometimes hours later: check each YouTube post of the last
+    3 days (videos.list with the API key: 1 unit per 50 videos; a locked video simply isn't returned)."""
+    rows = db.all("SELECT * FROM posts WHERE platform='youtube' AND status='done' AND remote_id!='' AND posted_at>?",
+                  (time.time() - 3 * 86400,))
+    if not rows:
+        return
+    found = {v["id"]: v for v in await yt.videos([r["remote_id"] for r in rows])}
+    for r in rows:
+        st = db.jload(r["stats"], {}) or {}
+        v = found.get(r["remote_id"])
+        if v:
+            st.update(views=v.get("views", 0), public=1)
+            st.pop("locked", None)
+        elif not st.get("locked"):
+            st.update(locked=1, public=0)
+            clip = db.one("SELECT hook FROM clips WHERE id=?", (r["clip_id"],)) or {}
+            db.event(f"YouTube made clip {r['clip_id']} private (Google's API audit not passed yet)", "publish", "warn")
+            await push.send("🔒 YouTube locked a Short as private", f"“{(clip.get('hook') or '')[:60]}” — share it from "
+                            "the phone instead until Google's audit passes.", url=f"/#clip/{r['clip_id']}", tag=f"ytl{r['id']}")
+        db.update("posts", r["id"], {"stats": db.jdump(st), "stats_at": time.time()})
 
 
 async def instagram_stats():
