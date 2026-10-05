@@ -13,12 +13,17 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--ink); }
+/* App frame (same fix as the finance app): the page never scrolls, only <main> does, and the tab bar is the last
+   row of the frame — so iOS can't lift it after the keyboard or a sheet closes. --app-h is set from JS. */
+html, body { height: 100%; overflow: hidden; }
 body {
   font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  padding: env(safe-area-inset-top) 0 calc(var(--tab-h) + env(safe-area-inset-bottom)) 0;
-  overscroll-behavior-y: none; -webkit-text-size-adjust: 100%;
+  height: var(--app-h, 100dvh); display: flex; flex-direction: column;
+  padding-top: env(safe-area-inset-top); box-sizing: border-box;
+  overscroll-behavior: none; -webkit-text-size-adjust: 100%;
 }
-main { max-width: 720px; margin: 0 auto; padding: 12px 16px 24px; }
+main { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.page { max-width: 720px; margin: 0 auto; padding: 12px 16px 24px; }
 h1 { font-size: 24px; margin: 8px 0 12px; letter-spacing: -.02em; }
 h2 { font-size: 17px; margin: 18px 0 8px; }
 a { color: var(--accent); }
@@ -85,13 +90,13 @@ textarea { min-height: 84px; resize: vertical; }
 .log { font-size: 12.5px; max-height: 320px; overflow: auto; }
 .log div { padding: 5px 0; border-bottom: 1px solid var(--line); }
 #tabs {
-  position: fixed; left: 0; right: 0; bottom: 0; height: calc(var(--tab-h) + env(safe-area-inset-bottom));
+  position: relative; flex: none; height: calc(var(--tab-h) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom); display: grid; grid-template-columns: repeat(6, 1fr);
   background: color-mix(in srgb, var(--card) 92%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   border-top: 1px solid var(--line); z-index: 10;
 }
 #tabs a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; text-decoration: none; color: var(--muted); font-size: 11px; font-weight: 650; position: relative; }
-#tabs a b { font-size: 20px; line-height: 1; }
+#tabs a svg { width: 24px; height: 24px; }
 #tabs a { font-size: 10.5px; }
 #tabs a.on { color: var(--accent); }
 #tabs a i { position: absolute; top: 6px; left: calc(50% + 8px); background: var(--accent); color: #fff; font-style: normal; font-size: 10.5px; font-weight: 800; border-radius: 99px; padding: 0 5px; min-width: 17px; text-align: center; }
@@ -106,3 +111,32 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
 pre.caption { white-space: pre-wrap; font: inherit; font-size: 13.5px; background: var(--chip); border-radius: 10px; padding: 10px; margin: 6px 0; }
 .login { max-width: 360px; margin: 10vh auto 0; }
 .logo { font-size: 46px; text-align: center; }
+
+/* line icons */
+.ico { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+#tabs a svg.ico { stroke-width: 1.7; }
+#tabs a.on svg.ico { stroke-width: 2.2; }
+/* copy feedback */
+.btn.copied { background: var(--good); border-color: var(--good); color: #fff; animation: pop .35s ease; }
+@keyframes pop { 0% { transform: scale(1); } 40% { transform: scale(1.08); } 100% { transform: scale(1); } }
+/* groups by source video */
+.group { margin: 14px 0 6px; }
+.group-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); font: inherit; cursor: pointer; text-align: left; }
+.group-head .title { flex: 1; min-width: 0; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-head .chev { transition: transform .2s; }
+.group.closed .chev { transform: rotate(-90deg); }
+.group.closed .group-body { display: none; }
+.group-body { padding-top: 8px; }
+.group-tools { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 2px; }
+/* selection */
+.clip { position: relative; }
+.pick { position: absolute; top: 10px; left: 10px; z-index: 2; width: 26px; height: 26px; border-radius: 8px; border: 2px solid #fff; background: rgba(0,0,0,.35); display: grid; place-items: center; cursor: pointer; }
+.pick.on { background: var(--accent); border-color: var(--accent); }
+.pick svg { width: 16px; height: 16px; stroke: #fff; stroke-width: 3; fill: none; }
+.clip.picked { outline: 2px solid var(--accent); }
+.bulkbar { position: sticky; bottom: 0; z-index: 5; display: flex; gap: 8px; align-items: center; padding: 10px 12px; margin-top: 10px; border-radius: 14px; background: var(--ink); color: var(--bg); box-shadow: 0 6px 24px rgba(0,0,0,.25); }
+.bulkbar .grow { font-weight: 700; }
+/* queue control */
+.qbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); margin-bottom: 10px; font-size: 13.5px; }
+.qbar .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good); flex: none; }
+.qbar.paused .dot { background: var(--warn); }

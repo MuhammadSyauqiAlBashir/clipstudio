@@ -213,6 +213,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "reminder_time": "19:00",       # daily push: clips waiting for review + how long the queue lasts
     "weekly_summary": True,         # Monday 09:00 push with last week's numbers
     "auto_submit": True,            # submit posted campaign clips to Clippo when Clippo says they're eligible
+    "pause_processing": False,      # owner's pause: don't start making clips from new videos
+    "pause_posting": False,         # owner's pause: don't start final renders or posts
 }
 
 _lock = threading.RLock()
@@ -253,7 +255,7 @@ ADDED_COLUMNS = {
     "posts": {"stats": "TEXT NOT NULL DEFAULT '{}'", "stats_at": "REAL NOT NULL DEFAULT 0",
               "scheduled": "INTEGER NOT NULL DEFAULT 0"},
     "clips": {"submitted": "TEXT NOT NULL DEFAULT '{}'"},  # {"instagram": unix time submitted to the campaign}
-    "sources": {"campaign_id": "INTEGER"},
+    "sources": {"campaign_id": "INTEGER", "paused": "INTEGER NOT NULL DEFAULT 0"},
 }
 
 

@@ -176,3 +176,15 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   reasons shown), "Submit now". Session expiry → 401 → owner copies a fresh request. TryBuzzer/Whop: sessions saved,
   integration not built yet (TryBuzzer copy was a public endpoint; needs a user request + its refresh token).
   Review page grouped by source video in time order (toggle "By score"). 43 tests.
+- 2026-10-05 14:20→ — Biznet routing outage: outbound IPv4 to Meta (57.144.x), GitHub (20.205.x) and later Google
+  (142.250.x, incl. Gemini/YouTube API) times out after Biznet hop 137.59.127.185; Cloudflare, Clippo, Groq, Apple push
+  OK. Owner opened a Biznet ticket (MTR image `~/work/biznet-mtr-20261005-1515.png`). Instagram clips 22/23 failed
+  (3 tries) → retry when back. `/api/accounts` takes ~40 s while Meta is down (owner: don't change it). Meta back ~17:45 WIB, Google ~17:30; GitHub still down then. A temporary 15-min
+  network watcher (transient timer) was used and then stopped and removed at the owner's request.
+  Local commits not yet pushed to GitHub (push when reachable). Deploys now wait for an idle worker.
+- 2026-10-05 evening — Queue control: settings `pause_processing` / `pause_posting` (Review / Ready queue bars) and per-video
+  pause (`sources.paused`), honoured by `worker.next_job` and `publish.run_one` (a running step always finishes). Bulk
+  approve/reject (`POST /api/clips/bulk`). Review + Ready "To post" grouped by video, collapsible (remembered), newest
+  video first, clips in time order; multi-select with a bulk bar. Copy buttons show "✓ Copied" + animation. Tab bar
+  uses line SVG icons. Bottom-bar lift fixed with the finance app's app-frame layout (body fixed height --app-h, only
+  <main> scrolls, tab bar is the last flex row). Deploy waits for an idle worker. 45 tests.

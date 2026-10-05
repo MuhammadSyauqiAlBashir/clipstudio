@@ -20,9 +20,17 @@ stop = asyncio.Event()
 
 
 def next_job(kinds: tuple[str, ...]) -> dict | None:
+    """The next job to start, skipping what the owner paused (whole queues or single videos)."""
+    st = db.settings()
+    kinds = tuple(k for k in kinds if not ((k == "process" and st.get("pause_processing"))
+                                           or (k == "final" and st.get("pause_posting"))))
+    if not kinds:
+        return None
     marks = ",".join("?" for _ in kinds)
-    return db.one(f"SELECT * FROM jobs WHERE status='queued' AND kind IN ({marks}) AND not_before<=? "
-                  "ORDER BY priority DESC, id LIMIT 1", (*kinds, time.time()))
+    return db.one(f"SELECT j.* FROM jobs j LEFT JOIN clips c ON c.id=j.clip_id "
+                  f"LEFT JOIN sources s ON s.id=COALESCE(j.source_id, c.source_id) "
+                  f"WHERE j.status='queued' AND j.kind IN ({marks}) AND j.not_before<=? AND COALESCE(s.paused, 0)=0 "
+                  "ORDER BY j.priority DESC, j.id LIMIT 1", (*kinds, time.time()))
 
 
 def finish(job: dict, status: str, error: str = ""):
@@ -123,6 +131,7 @@ async def watch_loop():
         await every("stats", 3600, autopilot.sync_all)
         await every("campaigns", 3 * 3600, campaigns.refresh)
         await every("clippo_submit", 2 * 3600, campaigns.auto_submit)
+        await every("trybuzzer_submit", 2 * 3600, campaigns.auto_submit_trybuzzer)
         try:
             await asyncio.wait_for(stop.wait(), timeout=5)
         except asyncio.TimeoutError:

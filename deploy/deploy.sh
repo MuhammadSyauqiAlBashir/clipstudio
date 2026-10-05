@@ -7,6 +7,29 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION="$(git rev-parse --short HEAD 2>/dev/null || echo dev)-$(date +%Y%m%d%H%M%S)"
 echo "==> clipstudio $VERSION"
+# Never cut running work short: wait (before changing ANY file) until the worker has no job running and no post
+# being uploaded. If it stays busy (e.g. a long live recording), stop here without changes. FORCE=1 skips the wait.
+busy() {
+  [ -x /opt/clipstudio/venv/bin/python ] || return 1
+  sudo -u clipstudio env CS_STATE_DIR=/var/lib/clipstudio PYTHONPATH=/opt/clipstudio /opt/clipstudio/venv/bin/python -c "
+from cs import db
+j = db.one(\"SELECT COUNT(*) n FROM jobs WHERE status='running'\")['n']
+p = db.one(\"SELECT COUNT(*) n FROM posts WHERE status IN ('uploading','processing')\")['n']
+print(f'{j} job(s) running, {p} post(s) uploading')
+raise SystemExit(0 if j or p else 1)" 2>/dev/null
+}
+if [ "${FORCE:-0}" != 1 ] && systemctl is-active --quiet clipstudio-worker; then
+  for i in $(seq "$(( ${WAIT_MIN:-15} * 4 ))"); do
+    msg="$(busy)" || break
+    [ "$i" = 1 ] && echo "==> worker busy ($msg): waiting for it to finish (up to ${WAIT_MIN:-15} min)…"
+    sleep 15
+  done
+  if msg="$(busy)"; then
+    echo "!! worker still busy ($msg). Nothing was changed. Deploy again later (or FORCE=1)."
+    exit 1
+  fi
+fi
+
 command -v ffmpeg >/dev/null || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends ffmpeg
 command -v deno >/dev/null || { echo "!! deno missing: install it to /usr/local/bin (see README)"; exit 1; }
 id clipstudio >/dev/null 2>&1 || sudo useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin clipstudio

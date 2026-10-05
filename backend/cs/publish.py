@@ -189,7 +189,13 @@ async def instagram(post: dict, clip: dict, caption: str):
             raise Later(time.time() + 15, "Instagram is processing the video")
         if st.get("status_code") in ("ERROR", "EXPIRED"):
             set_post(post["id"], remote_id="")
-            raise PublishError(f"Instagram rejected the video: {st.get('status', '')[:200]}")
+            r2 = await http.get(f"{IG_API}/{container}", params={"fields": "error_message", "access_token": tok})
+            detail = (r2.json().get("error_message") if r2.status_code == 200 else "") or st.get("status", "")
+            if "download" in detail.lower() and post["attempts"] < 2:  # Instagram couldn't fetch our link: retry
+                db.update("posts", post["id"], {"attempts": post["attempts"] + 1, "status": "queued",
+                                                "error": f"retrying: {detail[:150]}"})
+                raise Later(time.time() + 300, "Instagram couldn't download the video; retrying in 5 minutes")
+            raise PublishError(f"Instagram rejected the video: {detail[:250]}")
         me = await ig_me()
         r = await http.post(f"{IG_API}/{me['user_id']}/media_publish", data={"creation_id": container,
                                                                              "access_token": tok})
@@ -253,8 +259,13 @@ async def tiktok_draft(post: dict, clip: dict):
 # ---- worker side ---------------------------------------------------------------------------------------
 async def run_one() -> bool:
     """Publish the next due post. True if something was attempted."""
-    post = db.one("SELECT * FROM posts WHERE status IN ('queued','uploading','processing') AND not_before<=? "
-                  "ORDER BY id LIMIT 1", (time.time(),))
+    if db.settings().get("pause_posting"):  # posts already uploading finish (status 'uploading'/'processing')
+        post = db.one("SELECT * FROM posts WHERE status IN ('uploading','processing') AND not_before<=? ORDER BY id "
+                      "LIMIT 1", (time.time(),))
+    else:
+        post = db.one("SELECT p.* FROM posts p JOIN clips c ON c.id=p.clip_id JOIN sources s ON s.id=c.source_id "
+                      "WHERE (p.status IN ('uploading','processing') OR (p.status='queued' AND s.paused=0)) "
+                      "AND p.not_before<=? ORDER BY p.id LIMIT 1", (time.time(),))
     if not post:
         return False
     last = db.one("SELECT MAX(posted_at) t FROM posts WHERE platform=? AND status='done'", (post["platform"],))["t"] or 0

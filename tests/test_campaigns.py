@@ -18,7 +18,13 @@ RAW = {"id": "c1", "title": "OST FILOSOFI TERAS - MENIPU DIRI", "hashtags": ["#F
 
 @pytest.fixture(autouse=True)
 def state(tmp_path, monkeypatch):
-    from cs import config, db, push
+    from cs import clippo, config, db, push, trybuzzer
+    monkeypatch.setattr(clippo, "SESSION_FILE", tmp_path / "none.curl")
+    monkeypatch.setattr(trybuzzer, "AUTH_FILE", tmp_path / "none.json")
+
+    async def no_bounties():
+        return []
+    monkeypatch.setattr(trybuzzer, "fetch_bounties", no_bounties)
     monkeypatch.setattr(config, "STATE_DIR", tmp_path)
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "t.db")
     monkeypatch.setattr(config, "MIN_FREE_DISK_GB", 0)
@@ -136,3 +142,39 @@ def test_clippo_join_and_auto_submit(monkeypatch):
         assert items["tiktok"]["waiting"] and not items["instagram"]["waiting"]
         assert asyncio.run(campaigns.auto_submit()) == 0  # never twice
     main.app.dependency_overrides.clear()
+
+
+def test_trybuzzer_normalize_and_auto_submit(monkeypatch):
+    from cs import campaigns, db, trybuzzer
+    raw = {"id": "b1", "title": "Komala clips", "payment_per_1k_views": 3000, "allowed_platforms": ["tiktok", "instagram"],
+           "total_budget": 1000000, "claimed_amount": 950000, "hashtags": ["komala"], "content_type": "clipping",
+           "minimum_views": 500, "guideline_url": "https://docs/x", "accepting_submissions": True}
+    c = trybuzzer.normalize(raw)
+    assert c["rate"] == 3000 and c["hashtags"] == ["#komala"] and "budget_low" in c["flags"] and c["min_views"] == 500
+    assert "ugc" in trybuzzer.normalize({**raw, "title": "Diri Sendiri - Komala (UGC)"})["flags"]
+    assert "other_platforms" in trybuzzer.normalize({**raw, "allowed_platforms": ["threads"]})["flags"]
+    campaigns.upsert([c], "trybuzzer")
+    camp = db.one("SELECT * FROM campaigns WHERE platform='trybuzzer'")
+    db.update("campaigns", camp["id"], {"joined": 1})
+    now = db.now()
+    sid = db.insert("sources", {"campaign_id": camp["id"], "created_at": now, "updated_at": now})
+    cid = db.insert("clips", {"source_id": sid, "start": 0, "end": 20, "status": "posted", "hook": "H", "created_at": now,
+                              "updated_at": now, "posted": '{"instagram": "https://instagram.com/reel/a", "tiktok": "https://tiktok.com/v/b"}',
+                              "views": '{"tiktok": 120}'})
+    db.execute("INSERT INTO posts(clip_id,platform,status,stats,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+               (cid, "instagram", "done", '{"views": 900}', now, now))
+    monkeypatch.setattr(trybuzzer, "configured", lambda: True)
+    sent = []
+
+    async def accounts():
+        return [{"id": "acc-ig", "platform": "instagram", "username": "bashclipeveryday"}]
+
+    async def submit(bounty, url, platform, acc, views, desc=""):
+        sent.append((bounty, url, platform, acc["id"], views))
+        return {}
+    monkeypatch.setattr(trybuzzer, "social_accounts", accounts)
+    monkeypatch.setattr(trybuzzer, "submit", submit)
+    assert asyncio.run(campaigns.auto_submit_trybuzzer()) == 1
+    assert sent == [("b1", "https://instagram.com/reel/a", "instagram", "acc-ig", 900)]  # tiktok: 120 < 500 views
+    assert "needs ≥500 views" in db.kv_get(f"clippo_check:{cid}:tiktok")["reason"]
+    assert asyncio.run(campaigns.auto_submit_trybuzzer()) == 0  # never twice

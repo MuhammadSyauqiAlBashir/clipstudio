@@ -1,5 +1,5 @@
 // Clip Studio PWA: review clips, get finals, add sources and channels.
-import { $, api, ago, busy, el, gb, mb, mmss, setAuthHandler, sheet, sleep, toast } from "./lib.js"
+import { $, api, ago, busy, copyText, el, gb, mb, mmss, setAuthHandler, sheet, sleep, svgIcon, toast } from "./lib.js"
 
 const app = $("#app")
 const tabs = $("#tabs")
@@ -25,12 +25,12 @@ setAuthHandler(() => { me = null; render() })
 // ---------------------------------------------------------------------------------------------------------
 // Shell
 // ---------------------------------------------------------------------------------------------------------
-const TABS = [["review", "🎬", "Review"], ["ready", "✅", "Ready"], ["sources", "➕", "Add"], ["campaigns", "🎯", "Campaigns"], ["stats", "📈", "Stats"], ["more", "⚙️", "More"]]
+const TABS = [["review", "review", "Review"], ["ready", "ready", "Ready"], ["sources", "add", "Add"], ["campaigns", "campaigns", "Campaigns"], ["stats", "stats", "Stats"], ["more", "more", "More"]]
 
 function drawTabs(active, counts = {}) {
   tabs.hidden = false
-  tabs.replaceChildren(...TABS.map(([id, ic, label]) => el("a", { href: `#${id}`, class: id === active ? "on" : "" },
-    el("b", { text: ic }), label, counts[id] ? el("i", { text: counts[id] }) : null)))
+  tabs.replaceChildren(...TABS.map(([id, ic, label]) => el("a", { href: `#${id}`, class: id === active ? "on" : "", "aria-label": label },
+    svgIcon(ic), label, counts[id] ? el("i", { text: counts[id] }) : null)))
 }
 
 async function render() {
@@ -55,7 +55,7 @@ async function render() {
     counts = { review: c.review || 0, ready: (c.ready || 0) + (c.approved || 0) + (c.rendering || 0) }
   } catch (_) {}
   drawTabs(active, counts)
-  const view = el("div")
+  const view = el("div", { class: "page" })
   try {
     if (page === "review") await reviewPage(view)
     else if (page === "ready") await readyPage(view)
@@ -83,7 +83,29 @@ function autoRefresh(ms) {
   }, ms)
 }
 
-window.addEventListener("hashchange", render)
+window.addEventListener("hashchange", () => { app.scrollTo(0, 0); render() })
+
+// App frame height (same fix as the finance app): the real window height, re-measured on rotate/resize but not while
+// the keyboard is open; and keep the page itself from drifting after the keyboard/sheets close (that lifted the bar).
+function fitHeight() {
+  let h = Math.max(window.innerHeight, document.documentElement.clientHeight)
+  const standalone = navigator.standalone || matchMedia("(display-mode: standalone)").matches
+  if (standalone && screen.height) h = Math.max(h, matchMedia("(orientation: landscape)").matches ? Math.min(screen.width, screen.height) : Math.max(screen.width, screen.height))
+  const kb = window.visualViewport && window.visualViewport.height < h * 0.75
+  if (!kb) document.documentElement.style.setProperty("--app-h", `${h}px`)
+}
+fitHeight()
+window.addEventListener("resize", fitHeight)
+window.addEventListener("orientationchange", () => setTimeout(fitHeight, 300))
+window.addEventListener("pageshow", fitHeight)
+const settle = () => {
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || "")) return
+  if (window.scrollY || window.scrollX) window.scrollTo(0, 0)
+}
+const settleSoon = () => { setTimeout(settle, 60); setTimeout(settle, 450) }
+window.visualViewport && window.visualViewport.addEventListener("resize", settleSoon)
+document.addEventListener("focusout", settleSoon)
+document.addEventListener("close", settleSoon, true)
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && me) render() })
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {})
@@ -187,60 +209,136 @@ function editSheet(c, onDone) {
 // ---------------------------------------------------------------------------------------------------------
 // Review
 // ---------------------------------------------------------------------------------------------------------
+// Groups by source video (collapsible, remembered), pause per video, queue pause, multi-select.
+const picked = new Set()
+
+function isClosed(page, sid) { try { return JSON.parse(localStorage.getItem(`closed:${page}`) || "[]").includes(sid) } catch (_) { return false } }
+function setClosed(page, sid, closed) {
+  try {
+    const a = new Set(JSON.parse(localStorage.getItem(`closed:${page}`) || "[]"))
+    closed ? a.add(sid) : a.delete(sid)
+    localStorage.setItem(`closed:${page}`, JSON.stringify([...a]))
+  } catch (_) {}
+}
+
+function groupBox(page, sid, clips, cardFn, tools = []) {
+  const src = clips[0].source
+  const box = el("div", { class: `group${isClosed(page, sid) ? " closed" : ""}` })
+  const head = el("button", { class: "group-head", type: "button", "aria-expanded": isClosed(page, sid) ? "false" : "true" },
+    svgIcon("chev", "ico chev"), el("span", { class: "title", text: `${PLATFORM_ICON[src.platform] || "🎞"} ${src.title || "Video"}` }),
+    src.paused ? el("span", { class: "chip warn", text: "paused" }) : null,
+    el("span", { class: "chip", text: String(clips.length) }))
+  head.onclick = () => { box.classList.toggle("closed"); const c = box.classList.contains("closed"); setClosed(page, sid, c); head.setAttribute("aria-expanded", c ? "false" : "true") }
+  const pause = el("button", { class: "btn sm", type: "button" }, svgIcon(src.paused ? "play" : "pause"), src.paused ? "Resume this video" : "Pause this video")
+  pause.onclick = () => busy(pause, async () => { await api(`/sources/${sid}/pause`, { method: "PUT", json: { paused: !src.paused } }); toast(src.paused ? "Resumed" : "Paused — nothing new starts for this video"); render() }).catch(() => {})
+  box.append(head, el("div", { class: "group-body" }, el("div", { class: "group-tools" }, ...tools, pause), clips.map(cardFn)))
+  return box
+}
+
+function bySourceGroups(clips) {
+  const groups = new Map()
+  for (const c of clips) { if (!groups.has(c.source_id)) groups.set(c.source_id, []); groups.get(c.source_id).push(c) }
+  return groups
+}
+
+async function queueBar(what) {
+  const q = await api("/queue")
+  const paused = what === "processing" ? q.pause_processing : q.pause_posting
+  const label = what === "processing" ? `Making clips · ${q.queued.process} video(s) waiting` : `Finals & posting · ${q.queued.final} render(s), ${q.queued.posts} post(s) waiting`
+  const btn = el("button", { class: "btn sm", type: "button" }, svgIcon(paused ? "play" : "pause"), paused ? "Resume" : "Pause")
+  btn.onclick = () => busy(btn, async () => { await api("/queue/pause", { method: "PUT", json: { what, paused: !paused } }); toast(paused ? "Resumed" : "Paused — the current step finishes, nothing new starts"); render() }).catch(() => {})
+  return el("div", { class: `qbar${paused ? " paused" : ""}` }, el("span", { class: "dot" }), el("span", { class: "grow", text: `${paused ? "⏸ Paused · " : ""}${label}` }), btn)
+}
+
+function pickBox(c, card, onChange) {
+  const box = el("button", { class: `pick${picked.has(c.id) ? " on" : ""}`, type: "button", "aria-label": "Select" }, picked.has(c.id) ? svgIcon("check", "") : null)
+  if (picked.has(c.id)) card.classList.add("picked")
+  box.onclick = (e) => {
+    e.stopPropagation()
+    picked.has(c.id) ? picked.delete(c.id) : picked.add(c.id)
+    const on = picked.has(c.id)
+    box.classList.toggle("on", on); card.classList.toggle("picked", on); box.replaceChildren(on ? svgIcon("check", "") : "")
+    onChange()
+  }
+  card.prepend(box)
+}
+
 async function reviewPage(view) {
   const bySource = (localStorage.getItem("reviewOrder") || "source") === "source"
   const { clips } = await api(`/clips?status=review${bySource ? "&order=source" : ""}`)
+  for (const id of [...picked]) if (!clips.some((c) => c.id === id)) picked.delete(id)
   const toggle = el("div", { class: "seg" }, [["source", "By video (in order)"], ["score", "By score"]].map(([k, l]) =>
     el("button", { class: `btn sm ${(bySource ? "source" : "score") === k ? "on" : ""}`, type: "button", text: l, onclick: () => { try { localStorage.setItem("reviewOrder", k) } catch (_) {} render() } })))
-  view.append(el("div", { class: "topbar" }, el("h1", { text: "Review" }), el("span", { class: "muted small", text: `${clips.length} waiting` })), toggle)
+  view.append(el("div", { class: "topbar" }, el("h1", { text: "Review" }), el("span", { class: "muted small", text: `${clips.length} waiting` })), await queueBar("processing"), toggle)
   if (!clips.length) {
-    view.append(el("div", { class: "empty" }, el("b", { text: "🍿" }), "Nothing to review yet.", el("br"),
-      el("a", { href: "#sources", text: "Add a video link" })))
+    view.append(el("div", { class: "empty" }, el("b", { text: "🍿" }), "Nothing to review yet.", el("br"), el("a", { href: "#sources", text: "Add a video link" })))
     return
   }
-  view.append(el("p", { class: "muted small", style: { marginTop: 0 }, text: "Low-quality previews. Approving makes the 1080×1920 version." }))
-  let lastSource = null
-  for (const c of clips) {
-    if (bySource && c.source_id !== lastSource) {
-      lastSource = c.source_id
-      view.append(el("h2", { class: "ellipsis", text: `${PLATFORM_ICON[c.source.platform] || "🎞"} ${c.source.title || "Video"}` }))
-    }
-    const card = reviewCard(c, render)
-    if (bySource) card.querySelector(".hook").prepend(el("span", { class: "chip", style: { marginRight: "6px" }, text: `⏱ ${mmss(c.start)}` }))
-    view.append(card)
+  view.append(el("p", { class: "muted small", style: { marginTop: 0 }, text: "Low-quality previews. Approving makes the 1080×1920 version. Tick clips to approve or reject several at once." }))
+  const bar = el("div", { class: "bulkbar", hidden: true })
+  const updateBar = () => {
+    const n = picked.size
+    bar.hidden = n === 0
+    if (!n) return
+    const ap = el("button", { class: "btn sm good", type: "button", text: `✅ Approve ${n}` })
+    ap.onclick = () => busy(ap, async () => {
+      const r = await api("/clips/bulk", { method: "POST", json: { ids: [...picked], action: "approve" } })
+      picked.clear(); toast(`Approved ${r.done.length}${r.skipped.length ? `, ${r.skipped.length} skipped` : ""}`); render()
+    }).catch(() => {})
+    const rj = el("button", { class: "btn sm", type: "button", text: `✕ Reject ${n}` })
+    rj.onclick = () => { if (confirm(`Reject ${n} clip(s)?`)) busy(rj, async () => { const r = await api("/clips/bulk", { method: "POST", json: { ids: [...picked], action: "reject", reason: "bulk" } }); picked.clear(); toast(`Rejected ${r.done.length}`); render() }).catch(() => {}) }
+    const clr = el("button", { class: "btn sm ghost", type: "button", style: { color: "inherit" }, text: "Clear", onclick: () => { picked.clear(); render() } })
+    bar.replaceChildren(el("span", { class: "grow", text: `${n} selected` }), clr, rj, ap)
   }
+  const card = (c) => {
+    const k = reviewCard(c, render)
+    if (bySource) k.querySelector(".hook").prepend(el("span", { class: "chip", style: { marginRight: "6px" }, text: `⏱ ${mmss(c.start)}` }))
+    pickBox(c, k, updateBar)
+    return k
+  }
+  if (bySource) {
+    for (const [sid, list] of bySourceGroups(clips)) {
+      const all = el("button", { class: "btn sm", type: "button", text: "Select all", onclick: () => { list.forEach((c) => picked.add(c.id)); render() } })
+      view.append(groupBox("review", sid, list, card, [all]))
+    }
+  } else {
+    for (const c of clips) view.append(card(c))
+  }
+  view.append(bar)
+  updateBar()
 }
 
 // ---------------------------------------------------------------------------------------------------------
 // Ready (approved → final → post)
 // ---------------------------------------------------------------------------------------------------------
+function readyCard(c) {
+  const st = { approved: ["⏳ Waiting for the final render", "warn"], rendering: ["⚙️ Making 1080×1920…", "warn"], ready: ["✅ Ready", "good"],
+    posted: ["📤 Posted", "good"], rejected: ["✕ Rejected", "bad"], expired: ["⌛ Expired", ""] }[c.status] || [c.status, ""]
+  return el("div", { class: "card clip" },
+    el("div", { class: "media" }, poster(c), el("div", { class: "col", style: { gap: "5px", minWidth: 0 } },
+      el("span", { class: `chip ${st[1]}`, text: st[0], style: { alignSelf: "flex-start" } }),
+      el("div", { class: "hook", text: c.hook }),
+      c.reject_reason ? el("div", { class: "small muted", text: `Reason: ${c.reject_reason}` }) : null,
+      c.note ? el("div", { class: "small", style: { color: "var(--bad)" }, text: c.note }) : null,
+      Object.keys(c.posted || {}).length ? el("div", { class: "small muted", text: `Posted on: ${Object.keys(c.posted).join(", ")}` }) : null,
+      Object.entries(c.posts || {}).filter(([, v]) => v.status !== "done").map(([k, v]) => el("div", { class: "small", style: { color: v.status === "failed" ? "var(--bad)" : "var(--muted)" },
+        text: `${k}: ${v.status === "failed" ? "failed — open to retry" : v.status === "queued" && v.at * 1000 > Date.now() ? `🗓 ${new Date(v.at * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : "posting…"}` })),
+      el("div", { class: "small muted ellipsis", text: `${c.source.creator} · ${c.source.title}` }))),
+    el("div", { style: { padding: "0 12px 12px" } },
+      el("button", { class: "btn primary", style: { width: "100%" }, type: "button", text: c.status === "ready" || c.status === "posted" ? "Open · download · copy caption" : "Open", onclick: () => openClip(c.id) })))
+}
+
 async function readyPage(view) {
   const filter = sessionStorage.getItem("readyFilter") || "approved"
-  const { clips } = await api(`/clips?status=${filter}`)
-  view.append(el("h1", { text: "Ready to post" }),
+  const { clips } = await api(`/clips?status=${filter}${filter === "approved" ? "&order=source" : ""}`)
+  view.append(el("h1", { text: "Ready to post" }), filter === "approved" ? await queueBar("posting") : null,
     el("div", { class: "seg" }, [["approved", "To post"], ["posted", "Posted"], ["rejected", "Rejected"]].map(([k, l]) =>
       el("button", { class: `btn sm ${k === filter ? "on" : ""}`, type: "button", text: l, onclick: () => { sessionStorage.setItem("readyFilter", k); render() } }))))
   if (!clips.length) { view.append(el("div", { class: "empty" }, el("b", { text: "📭" }), "Nothing here yet.")); return }
-  let rendering = false
-  for (const c of clips) {
-    if (c.status === "approved" || c.status === "rendering" || Object.values(c.posts || {}).some((v) => ["queued", "uploading", "processing"].includes(v.status))) rendering = true
-    const st = { approved: ["⏳ Waiting for the final render", "warn"], rendering: ["⚙️ Making 1080×1920…", "warn"], ready: ["✅ Ready", "good"],
-      posted: ["📤 Posted", "good"], rejected: ["✕ Rejected", "bad"], expired: ["⌛ Expired", ""] }[c.status] || [c.status, ""]
-    const card = el("div", { class: "card clip" },
-      el("div", { class: "media" }, poster(c), el("div", { class: "col", style: { gap: "5px", minWidth: 0 } },
-        el("span", { class: `chip ${st[1]}`, text: st[0], style: { alignSelf: "flex-start" } }),
-        el("div", { class: "hook", text: c.hook }),
-        c.reject_reason ? el("div", { class: "small muted", text: `Reason: ${c.reject_reason}` }) : null,
-        c.note ? el("div", { class: "small", style: { color: "var(--bad)" }, text: c.note }) : null,
-        Object.keys(c.posted || {}).length ? el("div", { class: "small muted", text: `Posted on: ${Object.keys(c.posted).join(", ")}` }) : null,
-        Object.entries(c.posts || {}).filter(([, v]) => v.status !== "done").map(([k, v]) => el("div", { class: "small", style: { color: v.status === "failed" ? "var(--bad)" : "var(--muted)" },
-          text: `${k}: ${v.status === "failed" ? "failed — open to retry" : v.status === "queued" && v.at * 1000 > Date.now() ? `🗓 ${new Date(v.at * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : "posting…"}` })),
-        el("div", { class: "small muted ellipsis", text: `${c.source.creator} · ${c.source.title}` }))),
-      el("div", { style: { padding: "0 12px 12px" } },
-        el("button", { class: "btn primary", style: { width: "100%" }, type: "button", text: c.status === "ready" || c.status === "posted" ? "Open · download · copy caption" : "Open", onclick: () => openClip(c.id) })))
-    view.append(card)
-  }
-  if (rendering) autoRefresh(8000)
+  const busyNow = clips.some((c) => c.status === "approved" || c.status === "rendering" || Object.values(c.posts || {}).some((v) => ["queued", "uploading", "processing"].includes(v.status)))
+  if (filter === "approved") for (const [sid, list] of bySourceGroups(clips)) view.append(groupBox("ready", sid, list, readyCard))
+  else for (const c of clips) view.append(readyCard(c))
+  if (busyNow) autoRefresh(8000)
 }
 
 async function shareOrDownload(c, btn) {
@@ -274,7 +372,7 @@ async function openClip(id) {
   }
   for (const [p, label] of [["tiktok", "TikTok"], ["youtube", "YouTube Shorts"], ["instagram", "Instagram Reels"], ["facebook", "Facebook Reels"]]) {
     const copy = el("button", { class: "btn sm", type: "button", text: "Copy" })
-    copy.onclick = async () => { try { await navigator.clipboard.writeText(c.captions[p]); toast(`${label} caption copied`) } catch (_) { toast("Copy failed — long-press the text", "bad") } }
+    copy.onclick = () => copyText(copy, c.captions[p], `${label} caption copied`)
     const mark = el("button", { class: "btn sm", type: "button", text: c.posted[p] ? "✓ Posted" : "Mark posted" })
     mark.onclick = async () => {
       const link = prompt(`Link to the ${label} post (optional):`, c.posted[p] && c.posted[p] !== "posted" ? c.posted[p] : "")
@@ -476,9 +574,9 @@ async function browsePage(view) {
         el("div", {}, action))))
   }
   const prev = el("button", { class: "btn", type: "button", text: "← Newer", disabled: !bstate.stack.length })
-  prev.onclick = () => { bstate.page = bstate.stack.pop() || ""; render(); scrollTo(0, 0) }
+  prev.onclick = () => { bstate.page = bstate.stack.pop() || ""; render(); app.scrollTo(0, 0) }
   const next = el("button", { class: "btn", type: "button", text: "Older →", disabled: !r.next })
-  next.onclick = () => { bstate.stack.push(bstate.page); bstate.page = r.next; render(); scrollTo(0, 0) }
+  next.onclick = () => { bstate.stack.push(bstate.page); bstate.page = r.next; render(); app.scrollTo(0, 0) }
   view.append(el("div", { class: "row", style: { justifyContent: "space-between", marginTop: "8px" } }, prev,
     el("span", { class: "small muted", text: `Page ${bstate.stack.length + 1}` }), next))
 }
@@ -489,6 +587,7 @@ async function browsePage(view) {
 const FLAG = {
   needs_audio: ["🎵 needs a song/audio — breaks your music rule", "bad"], custom_edit: ["✂️ needs a custom edit (required text/segment)", "warn"],
   budget_low: ["💸 budget almost used up", "warn"], other_platforms: ["📵 not your platforms", "bad"], product_cart: ["🛒 product cart", ""],
+  ugc: ["🎥 UGC — needs your own filmed content, not clips", "bad"], application: ["📝 needs an application first", "warn"],
 }
 const rp = (n) => "Rp" + new Intl.NumberFormat("id-ID").format(n || 0)
 
@@ -501,7 +600,7 @@ async function campaignsPage(view) {
   const submitNow = el("button", { class: "btn sm", type: "button", text: "📤 Submit now" })
   submitNow.onclick = () => busy(submitNow, async () => { const x = await api("/campaigns/submit-now", { method: "POST" }); toast(x.submitted ? `Submitted ${x.submitted} clip(s)` : "Nothing eligible yet") }).catch(() => {})
   view.append(el("div", { class: "topbar" }, el("h1", { text: "Campaigns" }), el("div", { class: "row" }, r.clippo_connected ? submitNow : null, refresh)),
-    r.clippo_connected ? el("p", { class: "hint", style: { marginTop: 0 }, text: "🔗 Clippo account connected: Join works from here, and posted clips are checked with Clippo and submitted automatically every 2 hours once eligible." }) : null,
+    el("p", { class: "hint", style: { marginTop: 0 }, text: `🔗 Accounts: Clippo ${r.clippo_connected ? "✅" : "—"} · TryBuzzer ${r.trybuzzer_connected ? "✅" : "—"}. Posted clips of joined campaigns are submitted automatically every 2 hours once eligible.` }),
     el("div", { class: "seg" }, [["open", "Open"], ["joined", "Joined"], ["ended", "Ended"], ["hidden", "Hidden"], ["all", "All"]].map(([k, l]) =>
       el("button", { class: `btn sm ${k === show ? "on" : ""}`, type: "button", text: l, onclick: () => { sessionStorage.setItem("campShow", k); render() } }))),
     el("p", { class: "hint", style: { marginTop: 0 }, text: `Clippo's public list, checked every 3 hours${r.refreshed ? ` (last ${ago(r.refreshed)})` : ""}. Join in Clippo's app; Clip Studio does the clipping, hashtags and the links to submit.` }))
@@ -553,11 +652,12 @@ async function campaignSheet(c) {
       clippoConnected && c.platform === "clippo" && !c.joined
         ? el("button", { class: "btn primary", type: "button", text: "✅ Join this campaign", onclick: (e) => busy(e.target, async () => { await api(`/campaigns/${c.id}/join`, { method: "POST" }); toast("Joined on Clippo ✅"); close() }).catch(() => {}) })
         : null,
-      el("a", { class: "btn", href: c.url, target: "_blank", rel: "noopener", text: "Open in Clippo ↗" })),
+      el("a", { class: "btn", href: c.url, target: "_blank", rel: "noopener", text: c.platform === "trybuzzer" ? "Open TryBuzzer ↗" : "Open in Clippo ↗" })),
+    c.platform === "trybuzzer" ? el("p", { class: "hint", text: "TryBuzzer has no join step: tick “I joined” below and your posted clips for this campaign are submitted automatically once they reach its minimum views." }) : null,
     el("label", { class: "switch", style: { margin: "10px 0" } }, joined, "I joined this campaign"),
     el("h2", { text: "Brief" }), el("pre", { class: "caption", text: c.brief || "(no brief)" }),
     el("h2", { text: "Required hashtags" }),
-    el("div", { class: "row" }, el("div", { class: "grow small", text: tags || "none" }), tags ? el("button", { class: "btn sm", type: "button", text: "Copy", onclick: async () => { try { await navigator.clipboard.writeText(tags); toast("Copied") } catch (_) {} } }) : null),
+    el("div", { class: "row" }, el("div", { class: "grow small", text: tags || "none" }), tags ? el("button", { class: "btn sm", type: "button", text: "Copy", onclick: (e) => copyText(e.currentTarget, tags, "Hashtags copied") }) : null),
     el("p", { class: "hint", text: "Added automatically to every caption of clips made for this campaign." }),
     el("h2", { text: `Footage (${c.footage.length})` }),
     el("div", { class: "card small" }, c.footage.map((f) => el("div", { style: { padding: "6px 0", borderBottom: "1px solid var(--line)" } },
@@ -576,7 +676,7 @@ async function campaignSheet(c) {
       el("span", { class: "grow ellipsis" }, `${i.submitted ? "✓ " : ""}${i.platform}: `, el("a", { href: i.url, target: "_blank", rel: "noopener", text: i.url.replace(/^https?:\/\//, "").slice(0, 45) }),
         i.waiting ? el("div", { class: "muted", text: `⏳ ${i.waiting}` }) : null))),
     pending.length ? el("div", { class: "btns" },
-      el("button", { class: "btn", type: "button", text: `Copy ${pending.length} link(s)`, onclick: async () => { try { await navigator.clipboard.writeText(pending.map((i) => i.url).join("\n")); toast("Copied — paste them in Clippo") } catch (_) {} } }),
+      el("button", { class: "btn", type: "button", text: `Copy ${pending.length} link(s)`, onclick: (e) => copyText(e.currentTarget, pending.map((i) => i.url).join("\n"), "Links copied — paste them in the campaign") }),
       el("button", { class: "btn good", type: "button", text: "Mark submitted", onclick: async (e) => { await busy(e.target, () => api(`/campaigns/${c.id}/submitted`, { method: "POST", json: { items: pending.map((i) => ({ clip_id: i.clip_id, platform: i.platform })) } })).catch(() => {}); close() } })) : el("div", { class: "muted small", text: "All submitted." }),
   ] : el("div", { class: "muted small", text: "Posted clips of this campaign appear here with their links (TikTok: use Mark posted with the link after you post)." }))
 }
