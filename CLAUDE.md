@@ -192,3 +192,8 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   tab bar off the bottom with the "default" status bar), `[hidden]` really hides (empty bulk bar showed as a black
   line), append() skips null (printed "null"). Queue panels "Clip-making queue" / "Final render & posting queue" with
   named items, status light and plain-language waits (`friendly_wait`); Add page: "Refused / failed" folded section.
+- 2026-10-05 21:00 — One plain-language status per video (`main.source_state`: label, colour, sentence, active) used by
+  the Add page, the video page and the Clip-making queue: what it's doing now (step k of 4), what it waits for and when
+  it continues by itself (Groq daily allowance → after 00:00 WIB, Gemini → retry time, retries "try n of 3"), what is
+  already done ("Download done ✓"), place in line, paused, failed/refused with the reason. Final-render and posting rows
+  say the same kind of thing. `config.MAX_JOB_ATTEMPTS`. 47 tests.

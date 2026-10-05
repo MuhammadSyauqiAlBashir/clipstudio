@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("cs.worker")
 
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = config.MAX_JOB_ATTEMPTS
 stop = asyncio.Event()
 
 

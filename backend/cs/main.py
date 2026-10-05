@@ -206,33 +206,135 @@ SOURCE_FIELDS = ("id, channel_id, campaign_id, paused, platform, url, video_id, 
 def source_out(s: dict) -> dict:
     counts = {r["status"]: r["n"] for r in db.all("SELECT status, COUNT(*) n FROM clips WHERE source_id=? GROUP BY status",
                                                   (s["id"],))}
-    job = db.one("SELECT status, wait_reason, not_before FROM jobs WHERE source_id=? AND status IN ('queued','running') "
-                 "ORDER BY id DESC LIMIT 1", (s["id"],))
-    return {**s, "clips": counts, "job": job}
+    job = db.one("SELECT id, status, wait_reason, not_before, attempts, priority FROM jobs WHERE source_id=? AND "
+                 "status IN ('queued','running') ORDER BY id DESC LIMIT 1", (s["id"],))
+    return {**s, "clips": counts, "job": job, "state": source_state(s, job, counts)}
 
 
-def friendly_wait(reason: str, until: float) -> str:
-    """The worker's wait reasons in plain words."""
-    at = datetime.fromtimestamp(until, config.TZ).strftime("%H:%M") if until else ""
+def _at(ts: float) -> str:
+    d = datetime.fromtimestamp(ts, config.TZ)
+    return d.strftime("%H:%M") if d.date() == datetime.now(config.TZ).date() else d.strftime("%a %H:%M")
+
+
+def friendly_wait(reason: str, until: float, attempts: int = 0) -> str:
+    """The worker's wait reasons in plain words: what it waits for, when it continues, whether you need to act."""
+    at = _at(until) if until else ""
     r = (reason or "").lower()
     if "groq daily" in r:
-        return "Waiting for tomorrow's free transcription allowance (continues after 00:00 WIB)"
+        return (f"Today's free transcription allowance ({config.GROQ_DAILY_SECONDS / 3600:g} h of audio) is used up. "
+                "It continues by itself after 00:00 WIB — nothing for you to do.")
+    if "groq not answering" in r:
+        return f"Groq (the transcription service) isn't answering. Tries again by itself at {at}."
     if "groq" in r:
-        return f"Transcription limit for this hour reached — continues at {at}"
+        return f"Groq's hourly transcription limit was reached. Continues by itself at {at}."
     if "gemini" in r:
-        return f"AI (Gemini) busy or out of free quota — tries again at {at}"
+        return (f"Gemini (the AI that picks the moments) is busy or out of free quota. Tries again by itself at {at} "
+                "(its daily quota resets 14:00 WIB).")
     if "disk" in r:
-        return "Low disk space — waiting for the cleanup"
+        return (f"Less than {config.MIN_FREE_DISK_GB:g} GB of free disk space. Waits for old videos to be cleaned up "
+                f"(checks again at {at}).")
     if "paused by owner" in r:
-        return "Paused by you"
+        return "Paused by you."
     if "retrying" in r:
-        return f"Retrying after an error at {at}"
-    return reason or (f"Waiting until {at}" if until and until > time.time() else "Waiting for its turn")
+        err = reason.split(":", 1)[1].strip() if ":" in reason else ""
+        return (f"Something went wrong{f' ({err[:120]})' if err else ''}. Tries again by itself at {at} "
+                f"(try {min(attempts + 1, config.MAX_JOB_ATTEMPTS)} of {config.MAX_JOB_ATTEMPTS}).")
+    return reason or (f"Waiting until {at}." if until and until > time.time() else "Waiting for its turn.")
 
 
-STEP_LABEL = {"queued": "Waiting for its turn", "downloading": "Downloading", "transcribing": "Transcribing",
-              "scoring": "Finding the best moments", "rendering": "Making previews", "recording": "🔴 Recording live",
-              "waiting_replay": "Waiting for the live replay", "uploading": "Uploading"}
+# What each running step is doing, in plain words (status, step) → text.
+STEP_TEXT = {("downloading", "details"): "Reading the video details", ("downloading", "downloading"): "Downloading the video",
+             ("transcribing", "audio"): "Taking the audio out of the video",
+             ("transcribing", "transcribing"): "Turning the speech into text (Groq)",
+             ("scoring", "loudness"): "Measuring loudness to spot the lively parts",
+             ("scoring", "finding moments"): "Gemini is picking the best moments",
+             ("scoring", "checking music"): "Checking for music (music parts are left out)",
+             ("recording", "recording live"): "Recording the live stream (stops at 4 h)"}
+STEP_LABEL = {"queued": "Waiting for its turn", "uploading": "Receiving your upload", "downloading": "Downloading",
+              "transcribing": "Transcribing", "scoring": "Finding moments", "rendering": "Making previews",
+              "recording": "🔴 Recording live", "waiting_replay": "Waiting for the live replay"}
+DONE_SO_FAR = {"transcribing": "Download done ✓ (kept, nothing is lost). ",
+               "scoring": "Download and transcript done ✓ (kept, nothing is lost). ",
+               "rendering": "Moments chosen ✓. "}
+STEP_NO = {"downloading": 1, "transcribing": 2, "scoring": 3, "rendering": 4}
+
+
+def _ordinal(n: int) -> str:
+    return "Next" if n == 1 else f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+def line_position(job: dict) -> str:
+    """Where a ready-to-run job stands in the one-at-a-time line, in words."""
+    now = time.time()
+    ahead = db.one("SELECT COUNT(*) n FROM jobs j LEFT JOIN sources s ON s.id=j.source_id WHERE j.status='queued' "
+                   "AND j.kind='process' AND j.not_before<=? AND COALESCE(s.paused,0)=0 AND "
+                   "(j.priority>? OR (j.priority=? AND j.id<?))", (now, job["priority"], job["priority"], job["id"]))["n"]
+    finals = db.one("SELECT COUNT(*) n FROM jobs WHERE status='queued' AND kind='final'")["n"]
+    busy = db.one("SELECT j.kind, s.title FROM jobs j LEFT JOIN clips c ON c.id=j.clip_id LEFT JOIN sources s "
+                  "ON s.id=COALESCE(j.source_id, c.source_id) WHERE j.status='running' AND j.kind IN ('process','final')")
+    pos = ahead + 1
+    if not busy and not finals and pos == 1:
+        return "Starts in a few seconds."
+    parts = [f"{_ordinal(pos)} in line." if pos > 1 else "Next in line."]
+    if busy:
+        parts.append("Now working on: " + ("a final video of an approved clip" if busy["kind"] == "final"
+                                           else f"“{(busy['title'] or 'another video')[:60]}”") + ".")
+    if finals:
+        parts.append(f"{finals} final video{'s' if finals > 1 else ''} of approved clips go first.")
+    parts.append("One video at a time, so the server stays fast.")
+    return " ".join(parts)
+
+
+def source_state(s: dict, job: dict | None, counts: dict | None = None) -> dict:
+    """One clear status for a video: a short label, a chip colour, a plain sentence and whether it's working now."""
+    st, step = s["status"], s.get("step") or ""
+    job = job or {}
+    counts = counts or {}
+    running = job.get("status") == "running"
+    no = STEP_NO.get(st)
+    of4 = f" (step {no} of 4)" if no else ""
+    if running:
+        if st == "rendering" and step.startswith("preview"):
+            text = f"Making the preview videos: {step.split(' ', 1)[1].replace('/', ' of ')}"
+        else:
+            text = STEP_TEXT.get((st, step)) or STEP_LABEL.get(st, st)
+        return {"label": f"⚙️ {STEP_LABEL.get(st, st)}", "kind": "warn", "text": text + of4 + ".", "active": True}
+    if st in ("queued", "uploading", "downloading", "transcribing", "scoring", "rendering"):
+        done = DONE_SO_FAR.get(st, "")
+        if s.get("paused"):
+            return {"label": "⏸ Paused", "kind": "", "active": False,
+                    "text": done + "Paused by you, so it won't start until you resume this video."}
+        if job and (job.get("not_before") or 0) > time.time():
+            return {"label": "⏳ Waiting", "kind": "warn", "active": False,
+                    "text": done + friendly_wait(job.get("wait_reason", ""), job["not_before"], job.get("attempts", 0))}
+        if db.settings().get("pause_processing"):
+            return {"label": "⏸ Queue paused", "kind": "", "active": False,
+                    "text": done + "All clip-making is paused. Resume it on the Review page (Clip-making queue)."}
+        if job:
+            return {"label": "🕒 In line", "kind": "", "active": False, "text": done + line_position(job)}
+        if st == "uploading":
+            return {"label": "Uploading", "kind": "", "active": True, "text": "Receiving your upload."}
+        return {"label": "Stopped", "kind": "bad", "active": False,
+                "text": "Nothing is working on this video any more. Open it and tap ↻ Retry, or delete it."}
+    if st == "recording":
+        return {"label": "🔴 Recording", "kind": "bad", "active": True,
+                "text": "Recording the live stream; clips are made when it ends (max 4 h)."}
+    if st == "waiting_replay":
+        return {"label": "Waiting for replay", "kind": "", "active": False,
+                "text": "Another live was already being recorded, so this one is downloaded as a replay once it's published."}
+    if st == "review":
+        n = counts.get("review", 0)
+        return {"label": "✅ Clips ready", "kind": "good", "active": False,
+                "text": f"{n} clip{'s' if n != 1 else ''} waiting for your review." if n else "All clips decided."}
+    if st == "done":
+        return {"label": "Done", "kind": "", "active": False, "text": s.get("reason") or "Finished; all clips decided."}
+    if st == "failed":
+        return {"label": "❌ Failed", "kind": "bad", "active": False,
+                "text": f"{s.get('reason') or 'It stopped with an error.'} Open it and tap ↻ Retry to try again."}
+    if st == "rejected_by_gate":
+        return {"label": "🚫 Refused", "kind": "bad", "active": False,
+                "text": f"Not processed: {s.get('reason') or 'it did not pass the checks'}"}
+    return {"label": st, "kind": "", "active": False, "text": s.get("reason") or ""}
 
 
 @app.get("/api/queue")
@@ -243,23 +345,24 @@ async def queue_state(s: Session = Depends(current)):
     for src in db.all("SELECT id, title, creator, status, step, progress, paused FROM sources WHERE status IN "
                       "('queued','uploading','downloading','transcribing','scoring','rendering','recording','waiting_replay') "
                       "ORDER BY id"):
-        job = db.one("SELECT status, not_before, wait_reason FROM jobs WHERE source_id=? AND status IN ('queued','running') "
-                     "ORDER BY id DESC LIMIT 1", (src["id"],)) or {}
-        working = job.get("status") == "running"
-        waiting = not working and (job.get("not_before") or 0) > now
-        if working:
-            state = STEP_LABEL.get(src["status"], src["status"]) + (f" · {src['step']}" if src["step"] else "")
-        elif waiting:
-            state = friendly_wait(job.get("wait_reason", ""), job.get("not_before", 0))
-        elif src["status"] in ("recording", "waiting_replay"):
-            state = STEP_LABEL[src["status"]]
-        else:
-            state = "Waiting for its turn"
+        job = db.one("SELECT id, status, not_before, wait_reason, attempts, priority FROM jobs WHERE source_id=? AND "
+                     "status IN ('queued','running') ORDER BY id DESC LIMIT 1", (src["id"],))
+        working = bool(job) and job["status"] == "running"
+        waiting = not working and bool(job) and (job["not_before"] or 0) > now
+        state = source_state(src, job)
         making.append({"id": src["id"], "title": src["title"] or "Video", "creator": src["creator"], "working": working,
-                       "waiting": waiting, "paused": bool(src["paused"]), "state": state,
+                       "waiting": waiting, "paused": bool(src["paused"]), "label": state["label"], "state": state["text"],
                        "progress": src["progress"] if working else None})
+    def final_state(c: dict) -> str:
+        if c["status"] == "rendering":
+            return "Making the full-quality 1080×1920 video now"
+        if c["paused"]:
+            return "Paused by you (this video) — resume it on the Ready page"
+        if st.get("pause_posting"):
+            return "Waiting — final videos and posting are paused (Ready page → Resume)"
+        return "Waiting — the full-quality video is made next (before any new video is processed)"
     finals = [{"clip_id": c["id"], "hook": c["hook"], "source": c["title"] or "", "working": c["status"] == "rendering",
-               "paused": bool(c["paused"]), "state": "Making the 1080×1920 video" if c["status"] == "rendering" else "Waiting to render"}
+               "paused": bool(c["paused"]), "state": final_state(c)}
               for c in db.all("SELECT c.id, c.hook, c.status, s.title, s.paused FROM clips c JOIN sources s ON s.id=c.source_id "
                               "WHERE c.status IN ('approved','rendering') ORDER BY c.status='rendering' DESC, c.updated_at")]
     posts = []
@@ -267,8 +370,18 @@ async def queue_state(s: Session = Depends(current)):
                     "JOIN clips c ON c.id=p.clip_id JOIN sources s ON s.id=c.source_id "
                     "WHERE p.status IN ('queued','uploading','processing') ORDER BY p.status='queued', p.not_before, p.id"):
         when = datetime.fromtimestamp(p["not_before"], config.TZ).strftime("%a %H:%M") if p["not_before"] > now else ""
-        state = {"uploading": "Uploading…", "processing": "Processing on the platform…"}.get(p["status"]) or (
-            f"Scheduled {when}" if when else "Next in line")
+        state = {"uploading": "Uploading now…", "processing": "Uploaded — the platform is processing it…"}.get(p["status"])
+        if not state:
+            if p["paused"]:
+                state = "Paused by you (this video)"
+            elif st.get("pause_posting"):
+                state = "Posting is paused (Ready page → Resume)"
+            elif p["error"] and when:
+                state = f"Last try failed ({p['error'].removeprefix('retrying: ')[:80]}) — tries again {when}"
+            elif when:
+                state = f"Scheduled for {when}"
+            else:
+                state = "Posts within a few minutes (one at a time, 90 s apart per platform)"
         if p["platform"] == "tiktok" and p["status"] == "queued":
             state += " · goes to your TikTok inbox as a draft"
         posts.append({"id": p["id"], "clip_id": p["clip_id"], "platform": p["platform"], "hook": p["hook"],

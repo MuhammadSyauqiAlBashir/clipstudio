@@ -247,7 +247,7 @@ function queueRow(icon, title, sub, it) {
   return el("div", { class: `qrow${it.working ? " working" : ""}${it.paused ? " paused" : ""}` }, icon,
     el("div", { class: "grow", style: { minWidth: 0 } },
       el("div", { class: "qtitle", text: title }),
-      el("div", { class: "qsub", text: (it.paused ? "⏸ Paused · " : "") + sub }),
+      el("div", { class: "qsub", text: (it.paused && !it.label ? "⏸ Paused · " : "") + sub }),
       it.progress != null ? el("div", { class: "progress" }, el("i", { style: { width: `${Math.round(it.progress * 100)}%` } })) : null))
 }
 
@@ -268,7 +268,7 @@ async function queuePanel(what) {
   try { open = localStorage.getItem(key) === "1" } catch (_) {}
   const list = el("div", { class: "qlist", hidden: !open || !items.length })
   if (making) {
-    for (const it of q.making) list.append(queueRow(el("span", { class: "qicon", text: it.working ? "⚙️" : it.waiting ? "⏳" : "🎞" }), it.title, `${it.creator ? it.creator + " · " : ""}${it.state}`, it))
+    for (const it of q.making) list.append(queueRow(el("span", { class: "qicon", text: it.working ? "⚙️" : it.waiting ? "⏳" : "🎞" }), it.title, `${it.label} — ${it.state}`, it))
   } else {
     for (const it of q.finals) list.append(queueRow(el("span", { class: "qicon", text: it.working ? "⚙️" : "🎬" }), it.hook || `Clip ${it.clip_id}`, `${it.state} · ${it.source}`, it))
     for (const it of q.posts) {
@@ -454,17 +454,14 @@ function permSelect(value = "") {
 }
 
 function sourceRow(s) {
-  const [label, kind] = STATUS[s.status] || [s.status, ""]
-  const clips = s.clips || {}
-  const n = (clips.review || 0)
+  const st = s.state || { label: (STATUS[s.status] || [s.status])[0], kind: (STATUS[s.status] || [, ""])[1], text: s.step || s.reason || "" }
+  const bad = s.status === "failed" || s.status === "rejected_by_gate"
   return el("a", { class: "card", href: `#source/${s.id}`, style: { display: "block", color: "inherit", textDecoration: "none" } },
     el("div", { class: "row" }, el("span", { text: PLATFORM_ICON[s.platform] || "🔗" }), s.campaign_id ? el("span", { text: "🎯" }) : null, el("b", { class: "grow ellipsis", text: s.title || s.url || "Upload" }),
-      el("span", { class: `chip ${kind}`, text: label })),
+      el("span", { class: `chip ${st.kind}`, text: st.label })),
     el("div", { class: "small muted ellipsis", style: { marginTop: "4px" }, text: [s.creator, s.duration ? mmss(s.duration) : "", ago(s.created_at), s.kind].filter(Boolean).join(" · ") }),
-    s.step ? el("div", { class: "small", style: { marginTop: "4px" }, text: s.step }) : null,
-    ["downloading", "transcribing", "scoring", "rendering"].includes(s.status) ? el("div", { class: "progress" }, el("i", { style: { width: `${Math.round(s.progress * 100)}%` } })) : null,
-    s.reason ? el("div", { class: "small", style: { marginTop: "4px", color: s.status === "failed" || s.status === "rejected_by_gate" ? "var(--bad)" : "var(--muted)" }, text: s.reason }) : null,
-    n ? el("div", { class: "small", style: { marginTop: "4px", color: "var(--good)", fontWeight: 700 }, text: `${n} clip${n > 1 ? "s" : ""} to review` }) : null)
+    st.text ? el("div", { class: "small", style: { marginTop: "4px", color: bad ? "var(--bad)" : s.status === "review" ? "var(--good)" : "inherit", fontWeight: s.status === "review" ? 700 : 400 }, text: st.text }) : null,
+    st.active && s.status !== "recording" ? el("div", { class: "progress" }, el("i", { style: { width: `${Math.round(s.progress * 100)}%` } })) : null)
 }
 
 async function sourcesPage(view) {
