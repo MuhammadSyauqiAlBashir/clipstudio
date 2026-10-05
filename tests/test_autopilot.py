@@ -230,4 +230,31 @@ def test_queue_lists_items_with_plain_reasons():
         q = c.get("/api/queue").json()
     main.app.dependency_overrides.clear()
     it = q["making"][0]
-    assert it["title"] == "TITIK KUMPUL" and it["waiting"] and "tomorrow's free transcription" in it["state"]
+    assert it["title"] == "TITIK KUMPUL" and it["waiting"] and it["label"] == "⏳ Waiting"
+    assert "transcription allowance" in it["state"] and "after 00:00 WIB" in it["state"] and "Download done" in it["state"]
+
+
+def test_source_state_says_what_happens():
+    from cs import db, main
+    now = db.now()
+    def src(**kw):
+        return {"id": 0, "status": "transcribing", "step": "", "paused": 0, "reason": "", **kw}
+    run = {"id": 1, "status": "running", "not_before": 0, "wait_reason": "", "attempts": 1, "priority": 10}
+    s = main.source_state(src(step="transcribing"), run)
+    assert s["active"] and "Turning the speech into text" in s["text"] and "step 2 of 4" in s["text"]
+    s = main.source_state(src(status="rendering", step="preview 3/8"), run)
+    assert "3 of 8" in s["text"]
+    s = main.source_state(src(paused=1), {**run, "status": "queued"})
+    assert s["label"] == "⏸ Paused" and "Download done" in s["text"]
+    s = main.source_state(src(), {**run, "status": "queued", "not_before": now + 600, "attempts": 1,
+                                  "wait_reason": "retrying after an error: boom"})
+    assert "boom" in s["text"] and "try 2 of 3" in s["text"]
+    jid = db.insert("jobs", {"kind": "process", "source_id": 0, "not_before": 0, "created_at": now})
+    s = main.source_state(src(status="queued"), {**run, "id": jid, "status": "queued", "priority": 0})
+    assert s["label"] == "🕒 In line" and ("Starts in a few seconds" in s["text"] or "in line" in s["text"])
+    s = main.source_state(src(status="failed", reason="Video unavailable."), None)
+    assert s["kind"] == "bad" and "Retry" in s["text"]
+    s = main.source_state(src(status="rejected_by_gate", reason="Too short to clip (under 1 minute)."), None)
+    assert s["label"] == "🚫 Refused" and "Too short" in s["text"]
+    s = main.source_state(src(status="review"), None, {"review": 3})
+    assert s["text"] == "3 clips waiting for your review."

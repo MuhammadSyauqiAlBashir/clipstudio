@@ -48,6 +48,7 @@ VAPID_SUBJECT = os.environ.get("CS_VAPID_SUBJECT", "mailto:admin@bashir.my.id")
 # Guards (owner's rules: never hurt the live apps, free tiers only)
 MIN_FREE_DISK_GB = float(os.environ.get("CS_MIN_FREE_DISK_GB", "10"))
 GROQ_DAILY_SECONDS = int(os.environ.get("CS_GROQ_DAILY_SECONDS", "27000"))  # free tier: 28,800 s/day
+MAX_JOB_ATTEMPTS = 3  # a failing job is tried this many times (10, 20 min apart) before it fails
 YT_DAILY_UNITS = int(os.environ.get("CS_YT_DAILY_UNITS", "9800"))          # free: 10,000/day (one shared budget)
 MAX_SOURCE_HOURS = float(os.environ.get("CS_MAX_SOURCE_HOURS", "4"))       # VODs and live recordings
 KEEP_SOURCE_DAYS = 7
