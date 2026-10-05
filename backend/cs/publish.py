@@ -189,7 +189,13 @@ async def instagram(post: dict, clip: dict, caption: str):
             raise Later(time.time() + 15, "Instagram is processing the video")
         if st.get("status_code") in ("ERROR", "EXPIRED"):
             set_post(post["id"], remote_id="")
-            raise PublishError(f"Instagram rejected the video: {st.get('status', '')[:200]}")
+            r2 = await http.get(f"{IG_API}/{container}", params={"fields": "error_message", "access_token": tok})
+            detail = (r2.json().get("error_message") if r2.status_code == 200 else "") or st.get("status", "")
+            if "download" in detail.lower() and post["attempts"] < 2:  # Instagram couldn't fetch our link: retry
+                db.update("posts", post["id"], {"attempts": post["attempts"] + 1, "status": "queued",
+                                                "error": f"retrying: {detail[:150]}"})
+                raise Later(time.time() + 300, "Instagram couldn't download the video; retrying in 5 minutes")
+            raise PublishError(f"Instagram rejected the video: {detail[:250]}")
         me = await ig_me()
         r = await http.post(f"{IG_API}/{me['user_id']}/media_publish", data={"creation_id": container,
                                                                              "access_token": tok})

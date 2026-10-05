@@ -106,6 +106,8 @@ def test_signed_links(state):
         publish.queue_for(cid)
         r = c.get(path)
         assert r.status_code == 200 and r.content == b"video"
+        h = c.head(path)  # Meta's download proxy asks for the headers first
+        assert h.status_code == 200 and h.headers["content-length"] == "5"
         assert c.get(path.replace(".mp4", "").rstrip("0123456789abcdef") + "0" * 40 + ".mp4").status_code == 404
         _, _, _, _, exp, sig = path.split("/")
         old = int(exp) - 7200

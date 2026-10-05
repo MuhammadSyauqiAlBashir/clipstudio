@@ -860,8 +860,8 @@ async def thumb(cid: int, s: Session = Depends(current)):
                         headers={"Cache-Control": "private, max-age=86400"})
 
 
-@app.get("/api/pub/{cid}/{exp}/{sig}.mp4")
-async def public_final(cid: int, exp: int, sig: str):
+@app.api_route("/api/pub/{cid}/{exp}/{sig}.mp4", methods=["GET", "HEAD"])
+async def public_final(cid: int, exp: int, sig: str):  # HEAD too: Meta's download proxy asks for the headers first
     """Temporary signed link for a platform to fetch an approved final (no login; see publish.signed_url)."""
     if not publish.valid_link(cid, exp, sig):
         raise HTTPException(404, "Not found.")
