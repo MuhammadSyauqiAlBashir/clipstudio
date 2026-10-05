@@ -489,6 +489,7 @@ async function browsePage(view) {
 const FLAG = {
   needs_audio: ["🎵 needs a song/audio — breaks your music rule", "bad"], custom_edit: ["✂️ needs a custom edit (required text/segment)", "warn"],
   budget_low: ["💸 budget almost used up", "warn"], other_platforms: ["📵 not your platforms", "bad"], product_cart: ["🛒 product cart", ""],
+  ugc: ["🎥 UGC — needs your own filmed content, not clips", "bad"], application: ["📝 needs an application first", "warn"],
 }
 const rp = (n) => "Rp" + new Intl.NumberFormat("id-ID").format(n || 0)
 
@@ -501,7 +502,7 @@ async function campaignsPage(view) {
   const submitNow = el("button", { class: "btn sm", type: "button", text: "📤 Submit now" })
   submitNow.onclick = () => busy(submitNow, async () => { const x = await api("/campaigns/submit-now", { method: "POST" }); toast(x.submitted ? `Submitted ${x.submitted} clip(s)` : "Nothing eligible yet") }).catch(() => {})
   view.append(el("div", { class: "topbar" }, el("h1", { text: "Campaigns" }), el("div", { class: "row" }, r.clippo_connected ? submitNow : null, refresh)),
-    r.clippo_connected ? el("p", { class: "hint", style: { marginTop: 0 }, text: "🔗 Clippo account connected: Join works from here, and posted clips are checked with Clippo and submitted automatically every 2 hours once eligible." }) : null,
+    el("p", { class: "hint", style: { marginTop: 0 }, text: `🔗 Accounts: Clippo ${r.clippo_connected ? "✅" : "—"} · TryBuzzer ${r.trybuzzer_connected ? "✅" : "—"}. Posted clips of joined campaigns are submitted automatically every 2 hours once eligible.` }),
     el("div", { class: "seg" }, [["open", "Open"], ["joined", "Joined"], ["ended", "Ended"], ["hidden", "Hidden"], ["all", "All"]].map(([k, l]) =>
       el("button", { class: `btn sm ${k === show ? "on" : ""}`, type: "button", text: l, onclick: () => { sessionStorage.setItem("campShow", k); render() } }))),
     el("p", { class: "hint", style: { marginTop: 0 }, text: `Clippo's public list, checked every 3 hours${r.refreshed ? ` (last ${ago(r.refreshed)})` : ""}. Join in Clippo's app; Clip Studio does the clipping, hashtags and the links to submit.` }))
@@ -553,7 +554,8 @@ async function campaignSheet(c) {
       clippoConnected && c.platform === "clippo" && !c.joined
         ? el("button", { class: "btn primary", type: "button", text: "✅ Join this campaign", onclick: (e) => busy(e.target, async () => { await api(`/campaigns/${c.id}/join`, { method: "POST" }); toast("Joined on Clippo ✅"); close() }).catch(() => {}) })
         : null,
-      el("a", { class: "btn", href: c.url, target: "_blank", rel: "noopener", text: "Open in Clippo ↗" })),
+      el("a", { class: "btn", href: c.url, target: "_blank", rel: "noopener", text: c.platform === "trybuzzer" ? "Open TryBuzzer ↗" : "Open in Clippo ↗" })),
+    c.platform === "trybuzzer" ? el("p", { class: "hint", text: "TryBuzzer has no join step: tick “I joined” below and your posted clips for this campaign are submitted automatically once they reach its minimum views." }) : null,
     el("label", { class: "switch", style: { margin: "10px 0" } }, joined, "I joined this campaign"),
     el("h2", { text: "Brief" }), el("pre", { class: "caption", text: c.brief || "(no brief)" }),
     el("h2", { text: "Required hashtags" }),

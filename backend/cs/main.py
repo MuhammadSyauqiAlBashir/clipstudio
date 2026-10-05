@@ -566,9 +566,9 @@ async def list_campaigns(show: str = "open", s: Session = Depends(current)):
              "hidden": "hidden=1", "all": "1=1"}.get(show, "status='open' AND hidden=0")
     rows = db.all(f"SELECT * FROM campaigns WHERE {where} ORDER BY joined DESC, (status='open') DESC, rate DESC, "
                   "budget_used ASC")
-    from . import clippo
+    from . import clippo, trybuzzer
     return {"campaigns": [campaign_out(r) for r in rows], "refreshed": db.kv_get("campaigns_refreshed", 0) or 0,
-            "clippo_connected": clippo.configured()}
+            "clippo_connected": clippo.configured(), "trybuzzer_connected": trybuzzer.configured()}
 
 
 @app.post("/api/campaigns/refresh")
@@ -621,9 +621,15 @@ async def join_campaign(cid: int, s: Session = Depends(current)):
 @app.post("/api/campaigns/submit-now")
 async def campaigns_submit_now(s: Session = Depends(current)):
     from . import clippo
+    from . import trybuzzer
+    n = 0
     try:
-        n = await campaigns.auto_submit()
+        n += await campaigns.auto_submit()
     except clippo.ClippoError as e:
+        raise HTTPException(502, str(e)) from e
+    try:
+        n += await campaigns.auto_submit_trybuzzer()
+    except trybuzzer.TryBuzzerError as e:
         raise HTTPException(502, str(e)) from e
     return {"submitted": n}
 

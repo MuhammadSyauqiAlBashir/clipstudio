@@ -92,8 +92,8 @@ def upsert(items: list[dict], platform: str) -> list[dict]:
         data = {"title": c["title"], "creator": c["creator"], "rate": c["rate"], "platforms": db.jdump(c["platforms"]),
                 "budget_used": c["budget_used"], "clippers": c["clippers"], "hashtags": db.jdump(c["hashtags"]),
                 "footage": db.jdump(c["footage"]), "brief": c["brief"], "image": c["image"], "url": c["url"],
-                "flags": db.jdump(c["flags"]), "info": db.jdump({k: c[k] for k in ("rate_unit", "max_reward", "start",
-                                                                                     "end", "product_cart")}),
+                "flags": db.jdump(c["flags"]), "info": db.jdump({k: c.get(k) for k in ("rate_unit", "max_reward", "start",
+                                                                                         "end", "product_cart", "min_views")}),
                 "status": "open", "last_seen": now}
         if row:
             db.update("campaigns", row["id"], data)
@@ -161,18 +161,79 @@ async def auto_submit() -> int:
     return sent
 
 
+def _views(clip_id: int, platform: str, manual: dict) -> int | None:
+    post = db.one("SELECT stats FROM posts WHERE clip_id=? AND platform=?", (clip_id, platform))
+    st = db.jload((post or {}).get("stats"), {}) or {}
+    v = st.get("views") or manual.get(platform)
+    return int(v) if v is not None else None
+
+
+async def auto_submit_trybuzzer() -> int:
+    """TryBuzzer has no join step: for campaigns the owner marked as joined, submit posted links once their views reach
+    the campaign's minimum (views from the stats sync, or typed in for TikTok)."""
+    from . import push, trybuzzer
+    if not trybuzzer.configured() or not db.settings().get("auto_submit", True):
+        return 0
+    accounts = None
+    sent = 0
+    for camp in db.all("SELECT * FROM campaigns WHERE platform='trybuzzer' AND joined=1 AND status='open'"):
+        allowed = set(db.jload(camp["platforms"], []))
+        min_views = int((db.jload(camp["info"], {}) or {}).get("min_views") or 0)
+        for c in db.all("SELECT c.id, c.posted, c.submitted, c.views, c.hook FROM clips c JOIN sources s ON "
+                        "s.id=c.source_id WHERE s.campaign_id=? AND c.status IN ('ready','posted')", (camp["id"],)):
+            posted, sub = db.jload(c["posted"], {}) or {}, db.jload(c["submitted"], {}) or {}
+            manual = db.jload(c["views"], {}) or {}
+            for platform, url in posted.items():
+                if platform not in allowed or not str(url).startswith("http") or platform in sub:
+                    continue
+                views = _views(c["id"], platform, manual)
+                if min_views and (views or 0) < min_views:
+                    db.kv_set(f"clippo_check:{c['id']}:{platform}", {"at": time.time(), "reason":
+                              f"needs ≥{min_views:,} views (has {views if views is not None else 'unknown — type them in Stats'})"})
+                    continue
+                if accounts is None:
+                    accounts = await trybuzzer.social_accounts()
+                acc = next((a for a in accounts if str(a.get("platform", "")).lower() == platform), None)
+                if not acc:
+                    db.kv_set(f"clippo_check:{c['id']}:{platform}", {"at": time.time(),
+                              "reason": f"connect your {platform} account in TryBuzzer first"})
+                    continue
+                try:
+                    await trybuzzer.submit(camp["ext_id"], url, platform, acc, views or 0, c["hook"] or "")
+                except trybuzzer.TryBuzzerError as e:
+                    db.kv_set(f"clippo_check:{c['id']}:{platform}", {"at": time.time(), "reason": str(e)[:200]})
+                    if e.status in (401, 403):
+                        raise
+                    continue
+                sub[platform] = time.time()
+                db.update("clips", c["id"], {"submitted": db.jdump(sub)})
+                db.kv_set(f"clippo_check:{c['id']}:{platform}", {"at": time.time(), "reason": ""})
+                sent += 1
+        if sent:
+            db.event(f"Submitted clip link(s) to TryBuzzer: {camp['title'][:60]}", "campaign")
+    if sent:
+        await push.send(f"🎯 Submitted {sent} clip(s) to TryBuzzer", "Waiting for the brand's review", url="/#campaigns")
+    return sent
+
+
 async def refresh(notify: bool = True) -> int:
     first_run = not db.one("SELECT 1 FROM campaigns LIMIT 1")
     new = upsert(await fetch_clippo(), "clippo")
+    try:
+        from . import trybuzzer
+        new += upsert(await trybuzzer.fetch_bounties(), "trybuzzer")
+    except Exception as e:  # noqa: BLE001 - one platform down must not stop the other
+        log.warning("trybuzzer list: %s", e)
     try:
         await sync_joined()
     except Exception as e:  # noqa: BLE001 - the public list must refresh even if the session expired
         log.warning("clippo joined sync: %s", e)
     db.kv_set("campaigns_refreshed", time.time())
     if notify and not first_run:
-        for c in new[:5]:
+        for c in [x for x in new if "ugc" not in x["flags"] and "other_platforms" not in x["flags"]][:5]:
             warn = " ⚠️ needs edits" if {"needs_audio", "custom_edit"} & set(c["flags"]) else ""
-            await push.send(f"🎯 New Clippo campaign: Rp{c['rate']:,}/1k views", f"{c['title'][:80]}{warn}",
+            name = "TryBuzzer" if c["platform"] == "trybuzzer" else "Clippo"
+            await push.send(f"🎯 New {name} campaign: Rp{c['rate']:,}/1k views", f"{c['title'][:80]}{warn}",
                             url="/#campaigns", tag=f"camp{c['ext_id']}")
     return len(new)
 
