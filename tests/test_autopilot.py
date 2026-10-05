@@ -147,3 +147,23 @@ def test_youtube_visibility_check(state, monkeypatch):
     st = {r["remote_id"]: db.jload(r["stats"]) for r in db.all("SELECT remote_id, stats FROM posts")}
     assert st["pub1"]["public"] == 1 and st["pub1"]["views"] == 42 and st["lock1"]["locked"] == 1
     assert len([x for x in state if "locked" in x[0]]) == 1  # one push, not one per check
+
+
+def test_sync_all_keeps_going_when_one_platform_fails(monkeypatch):
+    from cs import autopilot, db
+    ran = []
+
+    async def boom():
+        ran.append("ig")
+        raise RuntimeError("instagram down")
+
+    async def ok_fb():
+        ran.append("fb")
+
+    async def ok_yt():
+        ran.append("yt")
+    monkeypatch.setattr(autopilot, "instagram_stats", boom)
+    monkeypatch.setattr(autopilot, "facebook_stats", ok_fb)
+    monkeypatch.setattr(autopilot, "youtube_visibility", ok_yt)
+    asyncio.run(autopilot.sync_all())
+    assert ran == ["ig", "fb", "yt"] and db.kv_get("stats_synced") > 0

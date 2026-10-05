@@ -106,7 +106,7 @@ async def youtube_visibility():
     """Google locks uploads from unaudited apps as private, sometimes hours later: check each YouTube post of the last
     3 days (videos.list with the API key: 1 unit per 50 videos; a locked video simply isn't returned)."""
     rows = db.all("SELECT * FROM posts WHERE platform='youtube' AND status='done' AND remote_id!='' AND posted_at>?",
-                  (time.time() - 3 * 86400,))
+                  (time.time() - 45 * 86400,))  # views for 45 days; the private-lock check matters in the first days
     if not rows:
         return
     found = {v["id"]: v for v in await yt.videos([r["remote_id"] for r in rows])}
@@ -123,6 +123,39 @@ async def youtube_visibility():
             await push.send("🔒 YouTube locked a Short as private", f"“{(clip.get('hook') or '')[:60]}” — share it from "
                             "the phone instead until Google's audit passes.", url=f"/#clip/{r['clip_id']}", tag=f"ytl{r['id']}")
         db.update("posts", r["id"], {"stats": db.jdump(st), "stats_at": time.time()})
+
+
+async def facebook_stats():
+    """Views, likes and comments of the Page's Reels (fields readable with pages_read_engagement; deeper video
+    insights would need read_insights)."""
+    from . import facebook
+    if not facebook.connected():
+        return
+    rows = db.all("SELECT * FROM posts WHERE platform='facebook' AND status='done' AND remote_id!='' AND posted_at>? "
+                  "ORDER BY stats_at LIMIT 40", (time.time() - 45 * 86400,))
+    async with httpx.AsyncClient(timeout=20) as http:
+        for p in rows:
+            r = await http.get(f"{facebook.API}/{p['remote_id']}", params={
+                "fields": "views,likes.summary(true).limit(0),comments.summary(true).limit(0)",
+                "access_token": config.FB_PAGE_TOKEN})
+            if r.status_code != 200:
+                log.warning("facebook stats %s: %s", p["remote_id"], r.text[:200])
+                continue
+            d = r.json()
+            stats = {"views": int(d.get("views") or 0),
+                     "likes": int(((d.get("likes") or {}).get("summary") or {}).get("total_count") or 0),
+                     "comments": int(((d.get("comments") or {}).get("summary") or {}).get("total_count") or 0)}
+            db.update("posts", p["id"], {"stats": db.jdump(stats), "stats_at": time.time()})
+
+
+async def sync_all():
+    """Every platform whose numbers can be read automatically (TikTok needs another permission: typed in)."""
+    for fn in (instagram_stats, facebook_stats, youtube_visibility):
+        try:
+            await fn()
+        except Exception:  # noqa: BLE001 - one platform failing must not stop the others
+            log.exception("stats sync %s", fn.__name__)
+    db.kv_set("stats_synced", time.time())
 
 
 async def instagram_stats():
