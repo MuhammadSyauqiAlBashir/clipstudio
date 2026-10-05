@@ -88,9 +88,9 @@ window.addEventListener("hashchange", () => { app.scrollTo(0, 0); render() })
 // App frame height (same fix as the finance app): the real window height, re-measured on rotate/resize but not while
 // the keyboard is open; and keep the page itself from drifting after the keyboard/sheets close (that lifted the bar).
 function fitHeight() {
-  let h = Math.max(window.innerHeight, document.documentElement.clientHeight)
-  const standalone = navigator.standalone || matchMedia("(display-mode: standalone)").matches
-  if (standalone && screen.height) h = Math.max(h, matchMedia("(orientation: landscape)").matches ? Math.min(screen.width, screen.height) : Math.max(screen.width, screen.height))
+  // The real window: with the normal ("default") status bar the app starts below it, so the screen height would be
+  // too tall and push the tab bar off the bottom.
+  const h = window.innerHeight || document.documentElement.clientHeight
   const kb = window.visualViewport && window.visualViewport.height < h * 0.75
   if (!kb) document.documentElement.style.setProperty("--app-h", `${h}px`)
 }
@@ -241,13 +241,55 @@ function bySourceGroups(clips) {
   return groups
 }
 
-async function queueBar(what) {
+const PLATFORM_SHORT = { instagram: ["IG", "#c13584"], facebook: ["FB", "#1877f2"], tiktok: ["TT", "#111"], youtube: ["YT", "#e00"] }
+
+function queueRow(icon, title, sub, it) {
+  return el("div", { class: `qrow${it.working ? " working" : ""}${it.paused ? " paused" : ""}` }, icon,
+    el("div", { class: "grow", style: { minWidth: 0 } },
+      el("div", { class: "qtitle", text: title }),
+      el("div", { class: "qsub", text: (it.paused ? "⏸ Paused · " : "") + sub }),
+      it.progress != null ? el("div", { class: "progress" }, el("i", { style: { width: `${Math.round(it.progress * 100)}%` } })) : null))
+}
+
+async function queuePanel(what) {
   const q = await api("/queue")
   const paused = what === "processing" ? q.pause_processing : q.pause_posting
-  const label = what === "processing" ? `Making clips · ${q.queued.process} video(s) waiting` : `Finals & posting · ${q.queued.final} render(s), ${q.queued.posts} post(s) waiting`
+  const making = what === "processing"
+  const items = making ? q.making : [...q.finals, ...q.posts]
+  const working = items.filter((i) => i.working).length
+  const waiting = items.length - working
+  const title = making ? "Clip-making queue" : "Final render & posting queue"
+  const summary = !items.length ? (making ? "Nothing waiting — add a video in +" : "Nothing waiting")
+    : [working ? `${working} working` : null, waiting ? `${waiting} waiting` : null].filter(Boolean).join(" · ")
   const btn = el("button", { class: "btn sm", type: "button" }, svgIcon(paused ? "play" : "pause"), paused ? "Resume" : "Pause")
-  btn.onclick = () => busy(btn, async () => { await api("/queue/pause", { method: "PUT", json: { what, paused: !paused } }); toast(paused ? "Resumed" : "Paused — the current step finishes, nothing new starts"); render() }).catch(() => {})
-  return el("div", { class: `qbar${paused ? " paused" : ""}` }, el("span", { class: "dot" }), el("span", { class: "grow", text: `${paused ? "⏸ Paused · " : ""}${label}` }), btn)
+  btn.onclick = (e) => { e.stopPropagation(); busy(btn, async () => { await api("/queue/pause", { method: "PUT", json: { what, paused: !paused } }); toast(paused ? "Resumed" : "Paused — the current step finishes, nothing new starts"); render() }).catch(() => {}) }
+  const key = `qopen:${what}`
+  let open = false
+  try { open = localStorage.getItem(key) === "1" } catch (_) {}
+  const list = el("div", { class: "qlist", hidden: !open || !items.length })
+  if (making) {
+    for (const it of q.making) list.append(queueRow(el("span", { class: "qicon", text: it.working ? "⚙️" : it.waiting ? "⏳" : "🎞" }), it.title, `${it.creator ? it.creator + " · " : ""}${it.state}`, it))
+  } else {
+    for (const it of q.finals) list.append(queueRow(el("span", { class: "qicon", text: it.working ? "⚙️" : "🎬" }), it.hook || `Clip ${it.clip_id}`, `${it.state} · ${it.source}`, it))
+    for (const it of q.posts) {
+      const [abbr, color] = PLATFORM_SHORT[it.platform] || [it.platform.slice(0, 2).toUpperCase(), "#666"]
+      list.append(queueRow(el("span", { class: "qbadge", style: { background: color }, text: abbr }), it.hook || `Clip ${it.clip_id}`, it.state, it))
+    }
+  }
+  const chev = svgIcon("chev", "ico chev")
+  const head = el("button", { class: "qhead", type: "button", "aria-expanded": open ? "true" : "false" },
+    el("span", { class: `dot${paused ? " paused" : working ? " working" : ""}` }),
+    el("div", { class: "grow", style: { minWidth: 0, textAlign: "left" } }, el("div", { class: "qtitle", text: title }),
+      el("div", { class: "qsub", text: paused ? `⏸ Paused · ${summary}` : summary })),
+    items.length ? chev : null, btn)
+  const box = el("div", { class: `qpanel${open ? " open" : ""}` }, head, list)
+  head.onclick = () => {
+    if (!items.length) return
+    const now = list.hidden
+    list.hidden = !now; box.classList.toggle("open", now); head.setAttribute("aria-expanded", now ? "true" : "false")
+    try { localStorage.setItem(key, now ? "1" : "0") } catch (_) {}
+  }
+  return box
 }
 
 function pickBox(c, card, onChange) {
@@ -269,7 +311,7 @@ async function reviewPage(view) {
   for (const id of [...picked]) if (!clips.some((c) => c.id === id)) picked.delete(id)
   const toggle = el("div", { class: "seg" }, [["source", "By video (in order)"], ["score", "By score"]].map(([k, l]) =>
     el("button", { class: `btn sm ${(bySource ? "source" : "score") === k ? "on" : ""}`, type: "button", text: l, onclick: () => { try { localStorage.setItem("reviewOrder", k) } catch (_) {} render() } })))
-  view.append(el("div", { class: "topbar" }, el("h1", { text: "Review" }), el("span", { class: "muted small", text: `${clips.length} waiting` })), await queueBar("processing"), toggle)
+  view.append(el("div", { class: "topbar" }, el("h1", { text: "Review" }), el("span", { class: "muted small", text: `${clips.length} waiting` })), await queuePanel("processing"), toggle)
   if (!clips.length) {
     view.append(el("div", { class: "empty" }, el("b", { text: "🍿" }), "Nothing to review yet.", el("br"), el("a", { href: "#sources", text: "Add a video link" })))
     return
@@ -331,7 +373,7 @@ function readyCard(c) {
 async function readyPage(view) {
   const filter = sessionStorage.getItem("readyFilter") || "approved"
   const { clips } = await api(`/clips?status=${filter}${filter === "approved" ? "&order=source" : ""}`)
-  view.append(el("h1", { text: "Ready to post" }), filter === "approved" ? await queueBar("posting") : null,
+  view.append(el("h1", { text: "Ready to post" }), filter === "approved" ? await queuePanel("posting") : null,
     el("div", { class: "seg" }, [["approved", "To post"], ["posted", "Posted"], ["rejected", "Rejected"]].map(([k, l]) =>
       el("button", { class: `btn sm ${k === filter ? "on" : ""}`, type: "button", text: l, onclick: () => { sessionStorage.setItem("readyFilter", k); render() } }))))
   if (!clips.length) { view.append(el("div", { class: "empty" }, el("b", { text: "📭" }), "Nothing here yet.")); return }
@@ -467,7 +509,18 @@ async function sourcesPage(view) {
       el("p", { class: "hint", style: { margin: 0 }, text: "Only videos you're allowed to clip. Movies, TV, studio and sports content is refused automatically." })))
   const { sources } = await api("/sources")
   if (!sources.length) view.append(el("div", { class: "empty" }, el("b", { text: "🎞" }), "No sources yet."))
-  for (const s of sources) view.append(sourceRow(s))
+  const refused = sources.filter((s) => ["rejected_by_gate", "failed"].includes(s.status))
+  for (const s of sources.filter((x) => !refused.includes(x))) view.append(sourceRow(s))
+  if (refused.length) {
+    const box = el("div", { class: `group${isClosed("sources", "refused") || !localStorage.getItem("closed:sources") ? " closed" : ""}` })
+    const head = el("button", { class: "group-head", type: "button" }, svgIcon("chev", "ico chev"),
+      el("span", { class: "title", text: "Refused / failed" }), el("span", { class: "chip bad", text: String(refused.length) }))
+    head.onclick = () => { box.classList.toggle("closed"); setClosed("sources", "refused", box.classList.contains("closed")) }
+    box.append(head, el("div", { class: "group-body" },
+      el("p", { class: "hint", style: { margin: "0 0 8px" }, text: "Refused by the gate (permission, title blocklist, too short) or failed (download/processing error). Open one to see why, retry or delete." }),
+      refused.map(sourceRow)))
+    view.append(box)
+  }
   if (sources.some((s) => ["queued", "downloading", "transcribing", "scoring", "rendering", "recording"].includes(s.status))) autoRefresh(6000)
 }
 

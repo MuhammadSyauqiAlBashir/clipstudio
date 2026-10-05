@@ -215,3 +215,19 @@ def test_pauses_and_bulk(monkeypatch):
         assert db.one("SELECT status FROM clips WHERE id=?", (r1,))["status"] == "rejected"
         assert c.put(f"/api/sources/{s1}/pause", json={"paused": False}).json()["paused"] is False
     main.app.dependency_overrides.clear()
+
+
+def test_queue_lists_items_with_plain_reasons():
+    from fastapi.testclient import TestClient
+
+    from cs import db, main
+    now = db.now()
+    sid = db.insert("sources", {"title": "TITIK KUMPUL", "creator": "X", "status": "transcribing", "created_at": now, "updated_at": now})
+    db.insert("jobs", {"kind": "process", "source_id": sid, "not_before": now + 3600, "created_at": now,
+                       "wait_reason": "Groq daily audio budget used (26662 s today)"})
+    main.app.dependency_overrides[main.current] = lambda: main.Session({"username": "bashirsyauqi"}, "t")
+    with TestClient(main.app, headers={"X-CS": "1"}) as c:
+        q = c.get("/api/queue").json()
+    main.app.dependency_overrides.clear()
+    it = q["making"][0]
+    assert it["title"] == "TITIK KUMPUL" and it["waiting"] and "tomorrow's free transcription" in it["state"]

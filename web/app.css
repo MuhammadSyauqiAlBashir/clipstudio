@@ -16,6 +16,7 @@ html, body { margin: 0; background: var(--bg); color: var(--ink); }
 /* App frame (same fix as the finance app): the page never scrolls, only <main> does, and the tab bar is the last
    row of the frame — so iOS can't lift it after the keyboard or a sheet closes. --app-h is set from JS. */
 html, body { height: 100%; overflow: hidden; }
+[hidden] { display: none !important; }
 body {
   font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   height: var(--app-h, 100dvh); display: flex; flex-direction: column;
@@ -140,3 +141,23 @@ pre.caption { white-space: pre-wrap; font: inherit; font-size: 13.5px; backgroun
 .qbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); margin-bottom: 10px; font-size: 13.5px; }
 .qbar .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good); flex: none; }
 .qbar.paused .dot { background: var(--warn); }
+
+/* queue panels */
+.qpanel { border: 1px solid var(--line); border-radius: 14px; background: var(--card); margin-bottom: 12px; overflow: hidden; }
+.qhead { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 0; background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
+.qhead .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.qhead .dot.working { background: var(--good); box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent); animation: breathe 1.6s ease-in-out infinite; }
+.qhead .dot.paused { background: var(--warn); }
+@keyframes breathe { 50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--good) 10%, transparent); } }
+.qhead .chev { transition: transform .2s; transform: rotate(-90deg); }
+.qpanel.open .qhead .chev { transform: none; }
+.qtitle { font-weight: 750; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qsub { font-size: 12.5px; color: var(--muted); }
+.qlist { border-top: 1px solid var(--line); max-height: 320px; overflow-y: auto; }
+.qrow { display: flex; gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+.qrow:last-child { border-bottom: 0; }
+.qrow.working { background: color-mix(in srgb, var(--good) 7%, transparent); }
+.qrow.paused { opacity: .65; }
+.qrow .progress { margin-top: 5px; }
+.qicon { width: 28px; text-align: center; font-size: 17px; flex: none; }
+.qbadge { width: 28px; height: 22px; border-radius: 6px; color: #fff; font-size: 11px; font-weight: 800; display: grid; place-items: center; flex: none; }
