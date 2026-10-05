@@ -179,8 +179,6 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
 - 2026-10-05 14:20→ — Biznet routing outage: outbound IPv4 to Meta (57.144.x), GitHub (20.205.x) and later Google
   (142.250.x, incl. Gemini/YouTube API) times out after Biznet hop 137.59.127.185; Cloudflare, Clippo, Groq, Apple push
   OK. Owner opened a Biznet ticket (MTR image `~/work/biznet-mtr-20261005-1515.png`). Instagram clips 22/23 failed
-  (3 tries) → retry when back. `/api/accounts` takes ~40 s while Meta is down (owner: don't change it). Temporary
-  watcher: transient `clipstudio-netwatch.timer` (every 15 min, `/usr/local/lib/clipstudio-netwatch.py`, pushes once
-  when all reachable, flag `/var/lib/clipstudio/netwatch-done`) — remove after: `sudo systemctl stop
-  clipstudio-netwatch.timer; sudo rm /usr/local/lib/clipstudio-netwatch.py /var/lib/clipstudio/netwatch-done`.
+  (3 tries) → retry when back. `/api/accounts` takes ~40 s while Meta is down (owner: don't change it). Meta back ~17:45 WIB, Google ~17:30; GitHub still down then. A temporary 15-min
+  network watcher (transient timer) was used and then stopped and removed at the owner's request.
   Local commits not yet pushed to GitHub (push when reachable). Deploys now wait for an idle worker.
