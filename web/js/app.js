@@ -375,7 +375,7 @@ async function readyPage(view) {
   const filter = sessionStorage.getItem("readyFilter") || "approved"
   const grouped = filter === "approved" || filter === "posted"
   const { clips } = await api(`/clips?status=${filter}${grouped ? "&order=source" : ""}`)
-  view.append(el("h1", { text: "Ready to post" }), filter === "approved" ? await queuePanel("posting") : null,
+  view.append(el("h1", { text: "Ready to post" }), grouped ? await queuePanel("posting") : null,
     el("div", { class: "seg" }, [["approved", "To post"], ["posted", "Posted"], ["rejected", "Rejected"]].map(([k, l]) =>
       el("button", { class: `btn sm ${k === filter ? "on" : ""}`, type: "button", text: l, onclick: () => { sessionStorage.setItem("readyFilter", k); render() } }))))
   if (!clips.length) { view.append(el("div", { class: "empty" }, el("b", { text: "📭" }), "Nothing here yet.")); return }
