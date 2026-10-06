@@ -381,8 +381,6 @@ async def queue_state(s: Session = Depends(current)):
                 state = "Paused by you (this video)"
             elif st.get("pause_posting"):
                 state = "Posting is paused (Ready page → Resume)"
-            elif p["error"] and when:
-                state = f"Last try failed ({p['error'].removeprefix('retrying: ')[:80]}) — tries again {when}"
             elif when:
                 state = f"Scheduled for {when}"
             else:
@@ -615,6 +613,7 @@ def clip_out(c: dict, src: dict | None = None) -> dict:
                    "files_deleted": bool(src.get("files_deleted"))},
         "captions": {p: post_caption(c, src, p) for p in PLATFORM_TAGS} if src else {},
         "posts": {r["platform"]: {"status": r["status"], "url": r["url"], "error": r["error"],
+                                  "reason": publish.explain(r["platform"], r["error"]) if r["status"] == "failed" else "",
                                   "at": r["not_before"] if r["status"] == "queued" else r["posted_at"],
                                   "stats": db.jload(r["stats"], {})}
                   for r in db.all("SELECT * FROM posts WHERE clip_id=?", (c["id"],))},

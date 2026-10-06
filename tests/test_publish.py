@@ -243,3 +243,26 @@ def test_facebook_reel_flow(state, monkeypatch):
     p = db.one("SELECT * FROM posts WHERE platform='facebook'")
     assert p["status"] == "done" and p["url"].endswith("/reel/v9")
     assert calls == ["upload", ("finish", "PUBLISHED", True)]  # uploaded once, published once
+
+
+def test_failures_stop_at_once_with_a_named_reason(state, monkeypatch):
+    import httpx
+
+    from cs import db, publish
+    cid = make_clip(state)
+    publish.queue_for(cid)
+
+    async def limited(post, clip, caption):  # even a network-type error is not retried by itself any more
+        raise httpx.ConnectTimeout("timed out")
+    monkeypatch.setattr(publish, "instagram", limited)
+    assert asyncio.run(publish.run_one())
+    p = db.one("SELECT status, error FROM posts WHERE clip_id=?", (cid,))
+    assert p["status"] == "failed" and "timed out" in p["error"]
+    assert not asyncio.run(publish.run_one())  # nothing is tried again until the owner taps Retry
+    ex = publish.explain
+    assert ex("facebook", "Facebook 400: We limit how often you can post").startswith("Facebook posting limit")
+    assert ex("tiktok", "TikTok 400: spam_risk_too_many_pending_share").startswith("TikTok inbox full")
+    assert ex("instagram", '{"error":{"message":"API access blocked."}}').startswith("Meta blocked the app")
+    assert ex("facebook", "Cannot call API for app 1 on behalf of user 2").startswith("Meta blocked the app")
+    assert ex("instagram", "Instagram rejected the video: Video download failed (Fwdproxy)").startswith("Instagram couldn't fetch")
+    assert "Retry" in ex("youtube", "something new")

@@ -191,10 +191,6 @@ async def instagram(post: dict, clip: dict, caption: str):
             set_post(post["id"], remote_id="")
             r2 = await http.get(f"{IG_API}/{container}", params={"fields": "error_message", "access_token": tok})
             detail = (r2.json().get("error_message") if r2.status_code == 200 else "") or st.get("status", "")
-            if "download" in detail.lower() and post["attempts"] < 2:  # Instagram couldn't fetch our link: retry
-                db.update("posts", post["id"], {"attempts": post["attempts"] + 1, "status": "queued",
-                                                "error": f"retrying: {detail[:150]}"})
-                raise Later(time.time() + 300, "Instagram couldn't download the video; retrying in 5 minutes")
             raise PublishError(f"Instagram rejected the video: {detail[:250]}")
         me = await ig_me()
         r = await http.post(f"{IG_API}/{me['user_id']}/media_publish", data={"creation_id": container,
@@ -256,6 +252,36 @@ async def tiktok_draft(post: dict, clip: dict):
     raise Later(time.time() + 15, "TikTok is processing the video")
 
 
+# ---- failure reasons in plain words ------------------------------------------------------------------
+NAMES = {"instagram": "Instagram", "facebook": "Facebook", "tiktok": "TikTok", "youtube": "YouTube"}
+
+
+def explain(platform: str, error: str) -> str:
+    """A platform's error → a short named reason + what to do (the raw error stays in posts.error)."""
+    p, e = NAMES.get(platform, platform.title()), (error or "").lower()
+    if "spam_risk_too_many_pending_share" in e:
+        return "TikTok inbox full — too many unposted drafts. Post or delete them in TikTok, then tap Retry."
+    if "limit how often" in e or "spam_risk" in e or "rate limit" in e or "too many" in e:
+        return f"{p} posting limit (anti-spam) — wait a few hours, up to a day, then tap Retry."
+    if "api access blocked" in e or "cannot call api for app" in e:
+        return "Meta blocked the app — confirm the developer account at developers.facebook.com, then tap Retry."
+    if "access token" in e or "session has expired" in e or "oauth" in e or "unauthorized" in e or "not connected" in e:
+        return f"{p} login expired — reconnect it in More → Auto-posting, then tap Retry."
+    if "uploads left" in e or "quota" in e:
+        return f"{p} daily upload limit reached — tap Retry after it resets (YouTube: 14:00 WIB)."
+    if "final video is missing" in e:
+        return "The full-quality video file is missing — approve the clip again to remake it."
+    if "download failed" in e or "fwdproxy" in e or "media could not be fetched" in e:
+        return f"{p} couldn't fetch the video from our server — tap Retry."
+    if "more than 30 minutes" in e:
+        return f"{p} took too long to process the video — tap Retry."
+    if "refused the video" in e or "couldn't process" in e or "unsupported" in e:
+        return f"{p} rejected the video file — tap Retry; if it fails again, tell Claude."
+    if "timed out" in e or "timeout" in e or "connect" in e or "network" in e:
+        return f"Couldn't reach {p} (network problem) — tap Retry."
+    return f"{p} refused the post — tap Retry; if it fails again, tell Claude (details below)."
+
+
 # ---- worker side ---------------------------------------------------------------------------------------
 async def run_one() -> bool:
     """Publish the next due post. True if something was attempted."""
@@ -293,14 +319,15 @@ async def run_one() -> bool:
         db.update("posts", post["id"], {"not_before": e.until})  # keeps updated_at = last real change
         return True
     except (PublishError, tiktok.TikTokError, youtube.YouTubeError, facebook.FacebookError, httpx.HTTPError, OSError) as e:
-        attempts = post["attempts"] + 1
-        if attempts < 3 and not isinstance(e, PublishError):
-            set_post(post["id"], attempts=attempts, not_before=time.time() + 300 * attempts, error=str(e)[:300])
-        else:
-            set_post(post["id"], status="failed", attempts=attempts, error=str(e)[:500])
-            db.event(f"{post['platform'].title()} post failed for clip {clip['id']}: {str(e)[:200]}", "publish", "error")
-            from . import push
-            await push.send(f"⚠️ {post['platform'].title()} post failed", str(e)[:120], url=f"/#clip/{clip['id']}")
+        # No automatic retries (owner, 2026-10-06): retrying into a platform's spam limit makes it worse. The post
+        # stops as 'failed' with a named reason; the owner taps Retry when it makes sense.
+        raw = str(e) or e.__class__.__name__
+        why = explain(post["platform"], raw)
+        set_post(post["id"], status="failed", attempts=post["attempts"] + 1, error=raw[:500])
+        db.event(f"{NAMES.get(post['platform'], post['platform'])} post failed for clip {clip['id']}: {why}",
+                 "publish", "error")
+        from . import push
+        await push.send(f"⚠️ {NAMES.get(post['platform'], post['platform'])} post failed", why[:150], url=f"/#clip/{clip['id']}")
         return True
     set_post(post["id"], status="done", remote_id=remote, url=url, posted_at=time.time(), error="")
     if post["platform"] == "tiktok":  # a draft in the inbox: the owner posts it (and marks it posted) in the app
