@@ -365,7 +365,7 @@ function readyCard(c) {
       c.note ? el("div", { class: "small", style: { color: "var(--bad)" }, text: c.note }) : null,
       Object.keys(c.posted || {}).length ? el("div", { class: "small muted", text: `Posted on: ${Object.keys(c.posted).join(", ")}` }) : null,
       Object.entries(c.posts || {}).filter(([, v]) => v.status !== "done").map(([k, v]) => el("div", { class: "small", style: { color: v.status === "failed" ? "var(--bad)" : "var(--muted)" },
-        text: `${k}: ${v.status === "failed" ? "failed — open to retry" : v.status === "queued" && v.at * 1000 > Date.now() ? `🗓 ${new Date(v.at * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : "posting…"}` })),
+        text: `${k}: ${v.status === "failed" ? `⚠️ ${v.reason || "failed"}` : v.status === "queued" && v.at * 1000 > Date.now() ? `🗓 ${new Date(v.at * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : "posting…"}` })),
       el("div", { class: "small muted ellipsis", text: `${c.source.creator} · ${c.source.title}` }))),
     el("div", { style: { padding: "0 12px 12px" } },
       el("button", { class: "btn primary", style: { width: "100%" }, type: "button", text: c.status === "ready" || c.status === "posted" ? "Open · download · copy caption" : "Open", onclick: () => openClip(c.id) })))
@@ -429,7 +429,7 @@ async function openClip(id) {
     const scheduled = post && post.status === "queued" && post.at * 1000 > Date.now()
     const st = post ? { queued: scheduled ? `🗓 Scheduled for ${when(post.at)}` : "⏳ Waiting to post", uploading: "⬆️ Uploading…", processing: "⚙️ Processing on the platform…",
       done: p === "tiktok" ? "📥 Sent to your TikTok inbox — open TikTok to post it, then tap Mark posted" : "✅ Posted automatically",
-      failed: `⚠️ Failed: ${post.error}` }[post.status] : ""
+      failed: `⚠️ ${post.reason || "Failed"}` }[post.status] : ""
     const pub = el("button", { class: "btn sm primary", type: "button", text: post && post.status === "failed" ? "Retry" : "Post now" })
     const views = post && post.status === "done" ? (post.stats.views ?? post.stats.reach) : undefined
     pub.onclick = () => busy(pub, async () => { c = (await api(`/clips/${c.id}/publish`, { method: "POST", json: { platform: p } })).clip; pub.remove(); toast("Posting…") }).catch(() => {})
@@ -439,6 +439,7 @@ async function openClip(id) {
       st ? el("div", { class: "small", style: { marginTop: "4px", color: post.status === "failed" ? "var(--bad)" : "inherit" } }, st,
         post.url ? el("span", {}, " · ", el("a", { href: post.url, target: "_blank", rel: "noopener", text: "open" })) : null,
         views !== undefined ? ` · 👁 ${views.toLocaleString()} views` : "",
+        post.status === "failed" && post.error ? el("details", { class: "muted", style: { marginTop: "4px" } }, el("summary", { text: "Details" }), el("div", { text: post.error })) : null,
         post.stats && post.stats.locked ? el("div", { style: { color: "var(--bad)" }, text: "🔒 YouTube locked it as private (Google's audit not passed yet) — share it from the phone" }) : null) : null,
       el("pre", { class: "caption", text: c.captions[p] })))
   }

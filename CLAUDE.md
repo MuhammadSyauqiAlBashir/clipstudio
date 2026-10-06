@@ -212,3 +212,9 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   punctuation; Groq stays first). First real use: Aa Juju + "DI SINI ADA SUSHIIIII!!!" transcribed via Deepgram
   (~4 s per 10-min chunk); sushi = 8 clips in review. Ready → Posted is now grouped by video (collapsible, no pause
   button), like To post.
+- 2026-10-06 — Meta locked the owner's developer account for "unusual activity" (05:58–08:55; 32 IG + 32 FB Reels and
+  37 TikTok drafts in 26 h); owner completed the confirmation, access back. Facebook then refused publishing with its
+  anti-spam limit ("We limit how often you can post"). TikTok `spam_risk_too_many_pending_share` = TikTok's own cap on
+  unposted inbox drafts (~5 per 24 h; we only space posts 90 s). **Owner: no automatic retries for posts** — a failure
+  stops at once as `failed`; `publish.explain()` turns the raw error into a named reason + what to do (shown on the
+  clip and Ready card, raw text under "Details", push + activity log). Instagram's download auto-retry removed too.
