@@ -406,7 +406,8 @@ async function openClip(id) {
   try { c = (await api(`/clips/${id}`)).clip; accounts = (await api("/accounts")).accounts } catch (e) { toast(e.message, "bad"); return }
   const { body, close } = sheet(c.hook || "Clip", { onClose: render })
   const src = c.has_final ? `/api/clips/${c.id}/final.mp4` : c.has_preview ? `/api/clips/${c.id}/preview.mp4` : null
-  body.append(src ? el("video", { class: "big-video", src, controls: true, playsinline: true }) : null)
+  body.append(el("div", { class: "small muted", style: { margin: "-2px 0 8px" } }, el("b", { text: `Clip #${c.id}` }), c.source.title ? ` · ${c.source.title}` : ""),
+    src ? el("video", { class: "big-video", src, controls: true, playsinline: true }) : null)
   if (c.has_final) {
     const share = el("button", { class: "btn primary", type: "button", text: "📲 Save / share video" })
     share.onclick = () => shareOrDownload(c, share)
