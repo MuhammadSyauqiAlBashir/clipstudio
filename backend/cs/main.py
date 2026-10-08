@@ -401,6 +401,7 @@ async def queue_state(s: Session = Depends(current)):
                       "can_pause": p["status"] == "queued", "source_id": p["source_id"], "src_paused": bool(p["paused"]),
                       "state": state})
     return {"pause_processing": bool(st.get("pause_processing")), "pause_posting": bool(st.get("pause_posting")),
+            "tiktok_direct": tiktok.direct_mode(),
             "making": making, "finals": finals, "posts": posts,
             "queued": {"process": len(making), "final": len(finals), "posts": len(posts)},
             "paused_sources": [r["id"] for r in db.all("SELECT id FROM sources WHERE paused=1")]}
@@ -644,6 +645,8 @@ def clip_out(c: dict, src: dict | None = None) -> dict:
                    "files_deleted": bool(src.get("files_deleted"))},
         "captions": {p: post_caption(c, src, p) for p in PLATFORM_TAGS} if src else {},
         "posts": {r["platform"]: {"status": r["status"], "url": r["url"], "error": r["error"],
+                                  "direct": (db.jload(r["options"], {}) or {}).get("mode") == "direct",
+                                  "privacy": (db.jload(r["options"], {}) or {}).get("privacy_level", ""),
                                   "reason": publish.explain(r["platform"], r["error"]) if r["status"] == "failed" else "",
                                   "at": r["not_before"] if r["status"] == "queued" else r["posted_at"],
                                   "stats": db.jload(r["stats"], {})}
@@ -1021,8 +1024,18 @@ async def accounts(s: Session = Depends(current)):
                 fb["error"] = str(e)[:200]
     out = {"instagram": ig, "facebook": fb,
            "tiktok": {"connected": tiktok.connected(), "username": ta.get("display_name", ""), "error": "",
-                      "can_connect": tiktok.configured(),
-                      "note": "Approved clips go to your TikTok inbox as drafts; you post them in the TikTok app."},
+                      "can_connect": tiktok.configured(), "app": tiktok.app_name(),
+                      "sandbox_ready": tiktok.configured("sandbox"),
+                      "can_direct": tiktok.connected() and tiktok.has_scope("video.publish"),
+                      "direct": tiktok.direct_mode(), "direct_on": bool(db.settings().get("tiktok_direct")),
+                      "private_only": tiktok.private_only(), "views": tiktok.has_scope("video.list"),
+                      "note": ("Direct Post: open a finished clip and tap Post to TikTok — you choose who can see it, "
+                               "then it goes straight to your profile."
+                               + (" Test app: TikTok only allows “Only me” posts here." if tiktok.app_name() == "sandbox"
+                                  else " Until TikTok approves Direct Post, only “Only me” posts work."
+                                  if tiktok.private_only() else ""))
+                              if tiktok.direct_mode() else
+                              "Approved clips go to your TikTok inbox as drafts; you post them in the TikTok app."},
            "youtube": {"connected": youtube.connected(), "username": youtube.auth().get("channel", ""), "error": "",
                        "can_connect": youtube.configured(),
                        "note": f"Until Google's audit passes, uploads are locked private, so keep auto-post off and "
@@ -1042,15 +1055,138 @@ async def tiktok_connect(s: Session = Depends(current)):
 @app.get("/api/tiktok/oauth")
 async def tiktok_oauth(code: str = "", state: str = "", error: str = "", error_description: str = ""):
     """TikTok sends the owner back here after the login. Protected by the single-use state (no session cookie)."""
-    if error or not tiktok.check_state(state):
+    app_ = tiktok.check_state(state)
+    if error or not app_:
         msg = error_description or error or "expired or invalid login link"
         return RedirectResponse("/#more?tiktok=" + quote(f"failed: {msg}"[:120]), status_code=302)
     try:
-        await tiktok.finish_login(code)
+        await tiktok.finish_login(code, app_)
     except (tiktok.TikTokError, httpx.HTTPError) as e:
         return RedirectResponse("/#more?tiktok=" + quote(f"failed: {e}"[:120]), status_code=302)
-    db.event("TikTok connected", "accounts")
+    db.event(f"TikTok connected ({'test app' if app_ == 'sandbox' else 'approved app'})", "accounts")
     return RedirectResponse("/#more?tiktok=connected", status_code=302)
+
+
+@app.get("/api/tiktok/creator")
+async def tiktok_creator(s: Session = Depends(current)):
+    """What the "Post to TikTok" sheet must show before a Direct Post (TikTok's rules): the account, the allowed
+    privacy levels (the owner picks one, no default), which interactions the account allows, the max length."""
+    if not tiktok.direct_mode():
+        raise HTTPException(400, "TikTok Direct Post isn't on (More → Auto-posting → TikTok).")
+    try:
+        ci = await tiktok.creator_info()
+    except (tiktok.TikTokError, httpx.HTTPError) as e:
+        raise HTTPException(502, publish.explain("tiktok", str(e))) from e
+    db.kv_set("tiktok_creator", {"avatar": ci.get("creator_avatar_url", ""), "at": time.time()})
+    opts = [o for o in ci.get("privacy_level_options") or [] if o in tiktok.PRIVACY_LABELS]
+    return {"nickname": ci.get("creator_nickname", ""), "username": ci.get("creator_username", ""),
+            "privacy": [{"value": o, "label": tiktok.PRIVACY_LABELS[o],
+                         "allowed": o == "SELF_ONLY" or not tiktok.private_only()} for o in opts],
+            "comment_disabled": bool(ci.get("comment_disabled")), "duet_disabled": bool(ci.get("duet_disabled")),
+            "stitch_disabled": bool(ci.get("stitch_disabled")),
+            "max_seconds": int(ci.get("max_video_post_duration_sec") or 0),
+            "private_only": tiktok.private_only(), "test_app": tiktok.app_name() == "sandbox"}
+
+
+@app.get("/api/tiktok/videos")
+async def tiktok_videos(s: Session = Depends(current)):
+    """The owner's latest TikTok videos with their numbers (video.list), cached 10 minutes."""
+    if not (tiktok.connected() and tiktok.has_scope("video.list")):
+        return {"available": False, "videos": []}
+    cache = db.kv_get(f"tiktok_videos_{tiktok.app_name()}", {}) or {}
+    if cache.get("at", 0) < time.time() - 600:
+        try:
+            vids = await tiktok.my_videos(pages=1)
+        except (tiktok.TikTokError, httpx.HTTPError) as e:
+            return {"available": True, "videos": cache.get("videos", []), "error": publish.explain("tiktok", str(e))}
+        cache = {"at": time.time(), "videos": [{"id": str(v.get("id")), "title": (v.get("title") or "")[:120],
+                                                "url": v.get("share_url", ""), "created": v.get("create_time", 0),
+                                                "views": v.get("view_count", 0), "likes": v.get("like_count", 0),
+                                                "comments": v.get("comment_count", 0), "shares": v.get("share_count", 0)}
+                                               for v in vids[:10]]}
+        db.kv_set(f"tiktok_videos_{tiktok.app_name()}", cache)
+    return {"available": True, "videos": cache["videos"], "at": cache["at"]}
+
+
+@app.get("/api/tiktok/avatar")
+async def tiktok_avatar(s: Session = Depends(current)):
+    """The account picture for the sheet, fetched here (TikTok's image hosts aren't in the page's CSP)."""
+    url = (db.kv_get("tiktok_creator", {}) or {}).get("avatar") or tiktok.auth().get("avatar", "")
+    if not tiktok.avatar_allowed(url):
+        raise HTTPException(404, "No picture.")
+    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as http:
+        r = await http.get(url)
+    if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
+        raise HTTPException(404, "No picture.")
+    return Response(r.content, media_type=r.headers["content-type"], headers={"Cache-Control": "private, max-age=3600"})
+
+
+class TikTokPostIn(BaseModel):
+    clip_ids: list[int] = Field(min_length=1, max_length=20)
+    title: str | None = Field(None, max_length=2200)  # one clip: the caption as edited in the sheet
+    privacy_level: str = Field(pattern="^(PUBLIC_TO_EVERYONE|MUTUAL_FOLLOW_FRIENDS|FOLLOWER_OF_CREATOR|SELF_ONLY)$")
+    allow_comment: bool = False
+    allow_duet: bool = False
+    allow_stitch: bool = False
+    disclose: bool = False
+    your_brand: bool = False
+    branded: bool = False
+    consent: bool = False
+
+
+@app.post("/api/tiktok/post")
+async def tiktok_post(body: TikTokPostIn, s: Session = Depends(current)):
+    """The owner's explicit "Post" from the sheet: queue a Direct Post per clip with exactly these choices."""
+    if not tiktok.direct_mode():
+        raise HTTPException(400, "TikTok Direct Post isn't on (More → Auto-posting → TikTok).")
+    if not body.consent:
+        raise HTTPException(400, "Please agree to TikTok's Music Usage Confirmation first.")
+    if body.disclose and not (body.your_brand or body.branded):
+        raise HTTPException(400, "You turned on the content disclosure: choose Your brand and/or Branded content.")
+    if body.branded and body.privacy_level == "SELF_ONLY":
+        raise HTTPException(400, "Branded content can't be private (Only me). Choose another audience.")
+    if tiktok.private_only() and body.privacy_level != "SELF_ONLY":
+        raise HTTPException(400, "Until TikTok approves Direct Post, only \"Only me\" posts are allowed.")
+    try:
+        ci = await tiktok.creator_info()
+    except (tiktok.TikTokError, httpx.HTTPError) as e:
+        raise HTTPException(502, publish.explain("tiktok", str(e))) from e
+    if body.privacy_level not in (ci.get("privacy_level_options") or []):
+        raise HTTPException(400, "That \"Who can see this\" choice isn't available for this TikTok account.")
+    max_s = int(ci.get("max_video_post_duration_sec") or 0)
+    done, skipped = [], []
+    for cid in body.clip_ids:
+        c = db.one("SELECT * FROM clips WHERE id=?", (cid,))
+        if not c or c["status"] not in ("ready", "posted") or not c["final"]:
+            skipped.append({"id": cid, "error": "Not a finished clip."})
+            continue
+        if max_s and c["end"] - c["start"] > max_s:
+            skipped.append({"id": cid, "error": f"Longer than this account may post ({max_s} s)."})
+            continue
+        row = db.one("SELECT * FROM posts WHERE clip_id=? AND platform='tiktok'", (cid,))
+        if row and row["status"] in ("uploading", "processing") or (row and row["status"] == "done"
+                                                                      and db.jload(row["options"], {}).get("mode") == "direct"):
+            skipped.append({"id": cid, "error": "Already on TikTok or on its way."})
+            continue
+        src = db.one("SELECT * FROM sources WHERE id=?", (c["source_id"],)) or {}
+        title = body.title if (body.title is not None and len(body.clip_ids) == 1) else post_caption(c, src, "tiktok")
+        opts = {"mode": "direct", "title": title, "privacy_level": body.privacy_level,
+                "allow_comment": body.allow_comment and not ci.get("comment_disabled"),
+                "allow_duet": body.allow_duet and not ci.get("duet_disabled"),
+                "allow_stitch": body.allow_stitch and not ci.get("stitch_disabled"),
+                "disclose": body.disclose, "your_brand": body.your_brand, "branded": body.branded,
+                "username": ci.get("creator_username", ""), "consent_at": time.time(), "by": s.username}
+        if row:
+            db.execute("UPDATE posts SET status='queued', error='', attempts=0, not_before=0, remote_id='', url='', "
+                       "options=?, paused=0, updated_at=? WHERE id=?", (db.jdump(opts), db.now(), row["id"]))
+        else:
+            db.execute("INSERT INTO posts(clip_id, platform, status, options, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+                       (cid, "tiktok", "queued", db.jdump(opts), db.now(), db.now()))
+        done.append(cid)
+    if done:
+        db.event(f"TikTok Direct Post queued for clip(s) {', '.join(map(str, done))} "
+                 f"({tiktok.PRIVACY_LABELS[body.privacy_level]})", "publish")
+    return {"done": done, "skipped": skipped}
 
 
 @app.post("/api/tiktok/disconnect")
@@ -1354,6 +1490,8 @@ class SettingsIn(BaseModel):
     post_times: str | None = Field(None, max_length=200)
     reminder_time: str | None = Field(None, pattern=r"^([01]?\d|2[0-3]):[0-5]\d$")
     weekly_summary: bool | None = None
+    tiktok_app: str | None = Field(None, pattern="^(production|sandbox)$")
+    tiktok_direct: bool | None = None
 
 
 @app.get("/api/settings")

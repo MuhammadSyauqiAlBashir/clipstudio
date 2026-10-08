@@ -138,7 +138,7 @@ def test_tiktok_callback_and_draft(state, monkeypatch):
     monkeypatch.setattr(config, "TIKTOK_CLIENT_KEY", "sbkey")
     monkeypatch.setattr(config, "TIKTOK_CLIENT_SECRET", "sec")
 
-    async def fake_finish(code):
+    async def fake_finish(code, app=None):
         db.kv_set("tiktok_auth", {"access_token": "a", "refresh_token": "r", "expires": time.time() + 9999,
                                   "display_name": "bashclipeveryday"})
     monkeypatch.setattr(tiktok, "finish_login", fake_finish)
@@ -294,4 +294,106 @@ def test_single_post_and_clip_pause(state, monkeypatch):
         assert fin["paused"] and "this clip" in fin["state"]
         c.put(f"/api/clips/{a}/pause", json={"paused": False})
         assert worker.next_job(("final",))["clip_id"] == a
+    main.app.dependency_overrides.clear()
+
+
+def test_tiktok_direct_post_rules_and_flow(state, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from cs import autopilot, config, db, main, publish, tiktok
+    monkeypatch.setattr(config, "TIKTOK_CLIENT_KEY", "prodkey")
+    monkeypatch.setattr(config, "TIKTOK_CLIENT_SECRET", "s1")
+    monkeypatch.setattr(config, "TIKTOK_SANDBOX_CLIENT_KEY", "sbkey")
+    monkeypatch.setattr(config, "TIKTOK_SANDBOX_CLIENT_SECRET", "s2")
+    # production asks only for what's approved; the sandbox for everything; the login link names its own key
+    assert "video.publish" not in tiktok.authorize_url() and "client_key=prodkey" in tiktok.authorize_url()
+    db.kv_set("settings", {"schedule_on": False, "tiktok_app": "sandbox"})
+    url = tiktok.authorize_url()
+    assert "client_key=sbkey" in url and "video.publish" in url and "video.list" in url
+    assert tiktok.check_state(url.split("state=")[1]) == "sandbox"
+    # each app keeps its own login
+    db.kv_set("tiktok_auth_sandbox", {"access_token": "a", "refresh_token": "r", "expires": time.time() + 9999,
+                                      "scope": "user.info.basic,video.upload,video.publish,video.list"})
+    assert tiktok.connected() and not tiktok.connected("production") and not tiktok.direct_mode()
+    db.kv_set("settings", {"schedule_on": False, "tiktok_app": "sandbox", "tiktok_direct": True})
+    assert tiktok.direct_mode() and tiktok.private_only()
+
+    cid = make_clip(state)
+    publish.queue_for(cid)  # Direct Post is never queued by itself: it needs the owner's choices
+    assert not db.one("SELECT 1 FROM posts WHERE platform='tiktok'")
+
+    async def creator():
+        return {"creator_username": "bashclipeveryday", "creator_nickname": "Bash", "creator_avatar_url": "",
+                "privacy_level_options": ["PUBLIC_TO_EVERYONE", "SELF_ONLY"], "comment_disabled": False,
+                "duet_disabled": True, "stitch_disabled": False, "max_video_post_duration_sec": 600}
+    monkeypatch.setattr(tiktok, "creator_info", creator)
+    main.app.dependency_overrides[main.current] = lambda: main.Session({"username": "bashirsyauqi"}, "t")
+    base = {"clip_ids": [cid], "privacy_level": "SELF_ONLY", "consent": True}
+    with TestClient(main.app, headers={"X-CS": "1"}) as c:
+        info = c.get("/api/tiktok/creator").json()
+        assert info["username"] == "bashclipeveryday" and info["duet_disabled"] and info["private_only"]
+        assert [p["allowed"] for p in info["privacy"]] == [False, True]  # test app: only "Only me"
+        assert c.post("/api/tiktok/post", json={**base, "consent": False}).status_code == 400
+        assert c.post("/api/tiktok/post", json={**base, "privacy_level": "PUBLIC_TO_EVERYONE"}).status_code == 400
+        assert c.post("/api/tiktok/post", json={**base, "disclose": True}).status_code == 400
+        assert c.post("/api/tiktok/post", json={**base, "disclose": True, "branded": True}).status_code == 400
+        r = c.post("/api/tiktok/post", json={**base, "title": "My caption", "allow_duet": True, "allow_comment": True}).json()
+        assert r["done"] == [cid]
+    main.app.dependency_overrides.clear()
+    p = db.one("SELECT * FROM posts WHERE platform='tiktok'")
+    opts = db.jload(p["options"], {})
+    assert opts["mode"] == "direct" and opts["title"] == "My caption" and opts["allow_comment"]
+    assert not opts["allow_duet"]  # the account has duets off: never sent as allowed
+    info_ = tiktok.post_info(opts)
+    assert info_["privacy_level"] == "SELF_ONLY" and info_["disable_duet"] and not info_["disable_comment"]
+
+    sent = {}
+
+    async def direct(path, o):
+        sent.update(o)
+        return "pub9"
+    seq = iter([{"status": "PROCESSING_UPLOAD"}, {"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": []}])
+
+    async def full(pid):
+        return next(seq)
+    monkeypatch.setattr(tiktok, "direct_post", direct)
+    monkeypatch.setattr(tiktok, "status_full", full)
+    db.execute("DELETE FROM posts WHERE platform!='tiktok'")
+    for _ in range(3):
+        db.execute("UPDATE posts SET not_before=0")
+        asyncio.run(publish.run_one())
+    p = db.one("SELECT * FROM posts WHERE platform='tiktok'")
+    assert p["status"] == "done" and sent["privacy_level"] == "SELF_ONLY"
+    assert db.one("SELECT status FROM clips WHERE id=?", (cid,))["status"] == "ready"  # private: not "posted"
+
+    # views come from video.list, matched by the video id in the link
+    db.execute("UPDATE posts SET url='https://www.tiktok.com/@bashclipeveryday/video/7123', posted_at=?", (time.time(),))
+
+    async def vids(pages=5):
+        return [{"id": 7123, "view_count": 1500, "like_count": 90, "comment_count": 4, "share_count": 2}]
+    monkeypatch.setattr(tiktok, "my_videos", vids)
+    asyncio.run(autopilot.tiktok_stats())
+    assert db.jload(db.one("SELECT stats FROM posts WHERE platform='tiktok'")["stats"], {})["views"] == 1500
+    assert tiktok.video_id("https://www.tiktok.com/@x/video/99?lang=en") == "99" and tiktok.video_id("nope") == ""
+    assert tiktok.avatar_allowed("https://p16-sign-va.tiktokcdn.com/a.jpeg") and not tiktok.avatar_allowed("https://evil.com/x")
+    assert publish.explain("tiktok", "TikTok 403: unaudited_client_can_only_post_to_private_accounts").startswith("TikTok only allows")
+
+
+def test_tiktok_videos_endpoint(state, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from cs import config, db, main, tiktok
+    monkeypatch.setattr(config, "TIKTOK_CLIENT_KEY", "k")
+    monkeypatch.setattr(config, "TIKTOK_CLIENT_SECRET", "s")
+    main.app.dependency_overrides[main.current] = lambda: main.Session({"username": "bashirsyauqi"}, "t")
+    with TestClient(main.app, headers={"X-CS": "1"}) as c:
+        assert c.get("/api/tiktok/videos").json() == {"available": False, "videos": []}
+        db.kv_set("tiktok_auth", {"access_token": "a", "refresh_token": "r", "expires": time.time() + 9999,
+                                  "scope": "user.info.basic,video.upload,video.list"})
+
+        async def vids(pages=5):
+            return [{"id": 1, "title": "Sushi", "view_count": 321, "like_count": 9, "share_url": "https://www.tiktok.com/@x/video/1"}]
+        monkeypatch.setattr(tiktok, "my_videos", vids)
+        r = c.get("/api/tiktok/videos").json()
+        assert r["available"] and r["videos"][0]["views"] == 321 and r["videos"][0]["id"] == "1"
     main.app.dependency_overrides.clear()
