@@ -337,6 +337,91 @@ async function queuePanel(what) {
   return box
 }
 
+// ---- TikTok: which app, how to post, and the Direct Post sheet --------------------------------------------
+function segRow(label, items, value, onPick, hint) {
+  return el("div", { style: { marginTop: "8px" } }, el("div", { class: "small", style: { fontWeight: 600, marginBottom: "4px" }, text: label }),
+    el("div", { class: "seg", style: { margin: 0 } }, items.map(([v, l, disabled]) =>
+      el("button", { class: `btn sm ${v === value ? "on" : ""}`, type: "button", text: l, disabled: !!disabled, onclick: () => v !== value && onPick(v) }))),
+    hint ? el("div", { class: "hint", style: { marginTop: "4px" }, text: hint }) : null)
+}
+
+function tiktokChoices(a) {
+  const set = async (json, msg) => { try { await api("/settings", { method: "PUT", json }); toast(msg); render() } catch (e) { toast(e.message, "bad") } }
+  return el("div", {},
+    a.sandbox_ready ? segRow("TikTok app", [["production", "Approved app"], ["sandbox", "Test app"]], a.app,
+      (v) => set({ tiktok_app: v }, v === "sandbox" ? "Using the test app — connect it below" : "Using the approved app"),
+      a.app === "sandbox" ? "Test app: for trying Direct Post and recording TikTok's review demo. Posts there are private (only you)." : null) : null,
+    segRow("How to post", [["inbox", "Inbox drafts"], ["direct", "Direct Post", !a.can_direct]], a.direct_on && a.can_direct ? "direct" : "inbox",
+      (v) => set({ tiktok_direct: v === "direct" }, v === "direct" ? "Direct Post on — tap Post to TikTok on a clip" : "Inbox drafts on"),
+      a.can_direct ? null : "Direct Post needs TikTok's approval (or the test app), then reconnect."))
+}
+
+async function tiktokSheet(clips, onDone) {
+  const { body, close } = sheet(clips.length > 1 ? `Post ${clips.length} clips to TikTok` : "Post to TikTok")
+  body.append(el("p", { class: "muted", text: "Loading your TikTok account…" }))
+  let ci
+  try { ci = await api("/tiktok/creator") } catch (e) { body.replaceChildren(el("p", { style: { color: "var(--bad)" }, text: e.message })); return }
+  const one = clips.length === 1 ? clips[0] : null
+  const tooLong = ci.max_seconds ? clips.filter((c) => c.end - c.start > ci.max_seconds) : []
+  const caption = one ? el("textarea", { value: one.captions.tiktok, maxlength: 2200, rows: 5 }) : null
+  const privacy = el("select", {}, el("option", { value: "", text: "Choose who can see this…", selected: true, disabled: true }),
+    ci.privacy.map((p) => el("option", { value: p.value, text: p.label + (p.allowed ? "" : " (after TikTok's approval)"), disabled: !p.allowed })))
+  const sw = (label, disabled, note) => {
+    const i = el("input", { type: "checkbox", disabled })
+    return [i, el("div", {}, el("label", { class: "switch" + (disabled ? " muted" : "") }, i, label),
+      disabled ? el("div", { class: "hint", style: { margin: "-2px 0 4px 34px" }, text: note }) : null)]
+  }
+  const [cm, cmRow] = sw("Allow comments", ci.comment_disabled, "turned off in your TikTok privacy settings")
+  const [du, duRow] = sw("Allow Duet", ci.duet_disabled, "turned off in your TikTok privacy settings")
+  const [stt, stRow] = sw("Allow Stitch", ci.stitch_disabled, "turned off in your TikTok privacy settings")
+  const [disc, discRow] = sw("Disclose video content", false)
+  const [yb, ybRow] = sw("Your brand — you're promoting yourself or your own business", false)
+  const [bc, bcRow] = sw("Branded content — you're promoting another brand or a third party", false)
+  const discBox = el("div", { class: "card col", hidden: true, style: { margin: "4px 0 0" } }, ybRow, bcRow)
+  const label = el("div", { class: "hint" })
+  const consent = el("p", { class: "hint" })
+  const post = el("button", { class: "btn primary", type: "button", text: one ? "Post to TikTok" : `Post ${clips.length - tooLong.length} to TikTok`, disabled: true })
+  const refresh = () => {
+    discBox.hidden = !disc.checked
+    const branded = disc.checked && bc.checked
+    for (const o of privacy.options) if (o.value === "SELF_ONLY") o.disabled = branded || !ci.privacy.find((p) => p.value === "SELF_ONLY")?.allowed
+    if (branded && privacy.value === "SELF_ONLY") privacy.value = ""
+    label.textContent = !disc.checked ? "" : bc.checked ? "Your video will be labeled “Paid partnership”." : yb.checked ? "Your video will be labeled “Promotional content”." : "Choose at least one: Your brand or Branded content."
+    consent.replaceChildren("By posting, you agree to TikTok's ",
+      branded ? el("a", { href: "https://www.tiktok.com/legal/page/global/bc-policy/en", target: "_blank", rel: "noopener", text: "Branded Content Policy" }) : null,
+      branded ? " and " : null,
+      el("a", { href: "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en", target: "_blank", rel: "noopener", text: "Music Usage Confirmation" }), ".")
+    post.disabled = !privacy.value || (disc.checked && !yb.checked && !bc.checked) || clips.length === tooLong.length
+  }
+  for (const i of [privacy, disc, yb, bc]) i.onchange = refresh
+  post.onclick = () => busy(post, async () => {
+    const r = await api("/tiktok/post", { method: "POST", json: { clip_ids: clips.filter((c) => !tooLong.includes(c)).map((c) => c.id),
+      title: caption ? caption.value : null, privacy_level: privacy.value, allow_comment: cm.checked, allow_duet: du.checked, allow_stitch: stt.checked,
+      disclose: disc.checked, your_brand: yb.checked, branded: bc.checked, consent: true } })
+    close()
+    toast(r.done.length ? `Sent to TikTok${r.done.length > 1 ? ` (${r.done.length} clips)` : ""} — it can take a few minutes to appear on your profile` : (r.skipped[0] || {}).error || "Nothing sent", r.done.length ? "" : "bad")
+    onDone && onDone()
+  }).catch(() => {})
+  body.replaceChildren(
+    el("div", { class: "row", style: { gap: "10px", marginBottom: "10px" } },
+      el("img", { src: "/api/tiktok/avatar", alt: "", style: { width: "44px", height: "44px", borderRadius: "50%", background: "var(--chip)", objectFit: "cover" }, onerror: (e) => { e.target.style.display = "none" } }),
+      el("div", { class: "grow" }, el("div", { class: "small muted", text: "Posting to" }), el("b", { text: `${ci.nickname}${ci.username ? ` (@${ci.username})` : ""}` }))),
+    ci.test_app || ci.private_only ? el("div", { class: "card small", style: { background: "color-mix(in srgb, var(--warn) 12%, transparent)" },
+      text: ci.test_app ? "Test app: TikTok only allows “Only me” posts here." : "Until TikTok approves Direct Post, only “Only me” posts are allowed." }) : null,
+    one ? el("video", { class: "big-video", src: `/api/clips/${one.id}/final.mp4`, controls: true, playsinline: true }) : el("div", { class: "card small" },
+      el("b", { text: `${clips.length} clips` }), el("div", { class: "muted", text: "Each one is posted with its own caption." }),
+      clips.map((c) => el("div", { text: `#${c.id} · ${c.hook}${tooLong.includes(c) ? " — too long for this account, skipped" : ""}`, style: { color: tooLong.includes(c) ? "var(--bad)" : "inherit" } }))),
+    one && tooLong.length ? el("p", { style: { color: "var(--bad)" }, text: `This clip is longer than your account may post (${ci.max_seconds} s).` }) : null,
+    el("div", { class: "col", style: { marginTop: "10px" } },
+      one ? el("label", { class: "field" }, "Caption", caption) : null,
+      el("label", { class: "field" }, "Who can see this video", privacy),
+      el("b", { text: "Allow users to" }), cmRow, duRow, stRow,
+      discRow, el("span", { class: "hint", text: "Turn on if this video promotes yourself, a brand, product or service." }), discBox, label,
+      consent, post,
+      el("p", { class: "hint", text: "After you post, TikTok may take a few minutes to process the video before it shows on your profile." })))
+  refresh()
+}
+
 function pickBox(c, card, onChange) {
   const box = el("button", { class: `pick${picked.has(c.id) ? " on" : ""}`, type: "button", "aria-label": "Select" }, picked.has(c.id) ? svgIcon("check", "") : null)
   if (picked.has(c.id)) card.classList.add("picked")
@@ -425,7 +510,12 @@ async function readyPage(view) {
       el("button", { class: `btn sm ${k === filter ? "on" : ""}`, type: "button", text: l, onclick: () => { sessionStorage.setItem("readyFilter", k); render() } }))))
   if (!clips.length) { view.append(el("div", { class: "empty" }, el("b", { text: "📭" }), "Nothing here yet.")); return }
   const busyNow = clips.some((c) => c.status === "approved" || c.status === "rendering" || Object.values(c.posts || {}).some((v) => ["queued", "uploading", "processing"].includes(v.status)))
-  if (filter === "approved") for (const [sid, list] of bySourceGroups(clips)) view.append(groupBox("ready", sid, list, readyCard))
+  const ttReady = (c) => c.has_final && c.status === "ready" && !((c.posts || {}).tiktok && ((c.posts.tiktok.direct && ["done", "queued", "uploading", "processing"].includes(c.posts.tiktok.status)) || ["queued", "uploading", "processing"].includes(c.posts.tiktok.status)))
+  const ttTools = (list) => {
+    const ok = list.filter(ttReady)
+    return lastQueue && lastQueue.tiktok_direct && ok.length ? [el("button", { class: "btn sm primary", type: "button", text: `Post ${ok.length} to TikTok…`, onclick: () => tiktokSheet(ok, render) })] : []
+  }
+  if (filter === "approved") for (const [sid, list] of bySourceGroups(clips)) view.append(groupBox("ready", sid, list, readyCard, ttTools(list)))
   else if (filter === "posted") for (const [sid, list] of bySourceGroups(clips)) view.append(groupBox("posted", sid, list, readyCard, [], { pause: false }))
   else for (const c of clips) view.append(readyCard(c))
   if (busyNow || (lastQueue && [...lastQueue.finals, ...lastQueue.posts].some((i) => i.working || (!i.paused && !String(i.state).startsWith("Scheduled"))))) autoRefresh(8000)
@@ -483,12 +573,15 @@ async function openClip(id) {
       const when = (t) => new Date(t * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })
       const scheduled = post && post.status === "queued" && post.at * 1000 > Date.now()
       const st = post ? { queued: scheduled ? `🗓 Scheduled for ${when(post.at)}` : "⏳ Waiting to post", uploading: "⬆️ Uploading…", processing: "⚙️ Processing on the platform…",
-        done: p === "tiktok" ? "📥 Sent to your TikTok inbox — open TikTok to post it, then tap Mark posted" : "✅ Posted automatically",
+        done: p === "tiktok" ? (post.direct ? (post.privacy === "SELF_ONLY" ? "✅ Posted on TikTok — only you can see it" : "✅ Posted on TikTok") : "📥 Sent to your TikTok inbox — open TikTok to post it, then tap Mark posted") : "✅ Posted automatically",
         failed: `⚠️ ${post.reason || "Failed"}` }[post.status] : ""
-      const pub = el("button", { class: "btn sm primary", type: "button", text: post && post.status === "failed" ? "Retry" : "Post now" })
+      const tdirect = p === "tiktok" && accounts && accounts.tiktok && accounts.tiktok.direct
+      const pub = el("button", { class: "btn sm primary", type: "button", text: tdirect ? (post && post.status === "failed" ? "Post again…" : "Post to TikTok…") : post && post.status === "failed" ? "Retry" : "Post now" })
       const views = post && post.status === "done" ? (post.stats.views ?? post.stats.reach) : undefined
-      pub.onclick = () => busy(pub, async () => { c = (await api(`/clips/${c.id}/publish`, { method: "POST", json: { platform: p } })).clip; toast("Posting…"); drawPlatforms(); live() }).catch(() => {})
-      const canPost = c.has_final && (!post || post.status === "failed" || scheduled) && !(c.posted || {})[p] && accounts && accounts[p] && accounts[p].connected
+      pub.onclick = tdirect ? () => tiktokSheet([c], async () => { c = (await api(`/clips/${c.id}`)).clip; drawPlatforms(); live() })
+        : () => busy(pub, async () => { c = (await api(`/clips/${c.id}/publish`, { method: "POST", json: { platform: p } })).clip; toast("Posting…"); drawPlatforms(); live() }).catch(() => {})
+      const canPost = c.has_final && accounts && accounts[p] && accounts[p].connected && !(c.posted || {})[p]
+        && (tdirect ? !post || post.status === "failed" || (post.status === "done" && !post.direct) : !post || post.status === "failed" || scheduled)
       plats.append(el("div", { class: "card", style: { marginTop: "10px" } },
         el("div", { class: "row" }, el("b", { class: "grow", text: label }), canPost ? pub : null, copy, c.has_final && !(post && post.status === "done" && p !== "tiktok") ? mark : null),
         st ? el("div", { class: "small", style: { marginTop: "4px", color: post.status === "failed" ? "var(--bad)" : "inherit" } }, st,
@@ -820,12 +913,12 @@ async function campaignSheet(c) {
 // ---------------------------------------------------------------------------------------------------------
 async function statsPage(view) {
   const days = +(sessionStorage.getItem("statsDays") || 30)
-  const r = await api(`/stats?days=${days}`)
+  const [r, tt] = await Promise.all([api(`/stats?days=${days}`), api("/tiktok/videos").catch(() => ({ available: false, videos: [] }))])
   const names = { instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok", youtube: "YouTube" }
   const sync = el("button", { class: "btn sm", type: "button", text: "↻ Sync now" })
   sync.onclick = () => busy(sync, async () => { await api("/stats/sync", { method: "POST" }); toast("Synced"); render() }).catch(() => {})
   view.append(el("div", { class: "topbar" }, el("h1", { text: "Stats" }), sync),
-    el("p", { class: "hint", style: { marginTop: 0 }, text: `Instagram, Facebook and YouTube numbers sync every hour${r.synced ? ` (last ${ago(r.synced)})` : ""}. TikTok: type the views in (reading them needs another TikTok permission).` }),
+    el("p", { class: "hint", style: { marginTop: 0 }, text: `Instagram, Facebook and YouTube numbers sync every hour${r.synced ? ` (last ${ago(r.synced)})` : ""}. TikTok: ${tt.available ? "synced from your account too." : "type the views in (reading them needs TikTok's approval)."}` }),
     el("div", { class: "seg" }, [7, 30, 90].map((d) => el("button", { class: `btn sm ${d === days ? "on" : ""}`, type: "button", text: `${d} days`, onclick: () => { sessionStorage.setItem("statsDays", d); render() } }))),
     el("div", { class: "card" }, el("dl", { class: "kv" },
       el("dt", { text: "Views" }), el("dd", { text: r.views.toLocaleString() }),
@@ -833,6 +926,16 @@ async function statsPage(view) {
       el("dt", { text: "Scheduled" }), el("dd", { text: r.queue.clips ? `${r.queue.clips} clips until ${new Date(r.queue.until * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : "queue empty" }),
       el("dt", { text: "Waiting for you" }), el("dd", {}, r.review_waiting ? el("a", { href: "#review", text: `${r.review_waiting} to review` }) : "none"))),
     r.ig_insights ? null : el("p", { class: "hint", text: "Instagram views need the 'instagram_business_manage_insights' permission on your Meta app (until then: likes and comments)." }))
+  if (tt.available) {
+    view.append(el("h2", { text: "Your latest TikTok videos" }), el("div", { class: "card" },
+      tt.error ? el("p", { class: "small", style: { color: "var(--bad)", marginTop: 0 }, text: tt.error }) : null,
+      tt.videos.length ? tt.videos.map((v) => el("div", { class: "row", style: { padding: "7px 0", borderBottom: "1px solid var(--line)", gap: "8px" } },
+        el("div", { class: "grow", style: { minWidth: 0 } }, el("div", { class: "ellipsis", style: { fontWeight: 600 }, text: v.title || "(no caption)" }),
+          el("div", { class: "small muted", text: `${v.created ? new Date(v.created * 1000).toLocaleDateString() : ""} · ❤ ${(v.likes || 0).toLocaleString()} · 💬 ${(v.comments || 0).toLocaleString()} · ↗ ${(v.shares || 0).toLocaleString()}` })),
+        el("span", { class: "chip accent", text: `👁 ${(v.views || 0).toLocaleString()}` }),
+        v.url ? el("a", { class: "btn sm", href: v.url, target: "_blank", rel: "noopener", text: "Open" }) : null))
+        : el("p", { class: "muted small", style: { margin: 0 }, text: "No public TikTok videos yet." })))
+  }
   if (!r.clips.length) { view.append(el("div", { class: "empty" }, el("b", { text: "📊" }), "No posts in this period yet.")); return }
   view.append(el("h2", { text: "Clips, most viewed first" }))
   for (const c of r.clips) {
@@ -842,7 +945,7 @@ async function statsPage(view) {
       el("div", { class: "row wrap", style: { marginTop: "6px", gap: "6px" } }, Object.entries(c.platforms).map(([p, v]) => {
         const inp = el("input", { type: "number", min: 0, value: v.views || "", placeholder: "views", style: { width: "110px", padding: "4px 8px" } })
         inp.onchange = async () => { try { await api(`/clips/${c.clip_id}/views`, { method: "PUT", json: { platform: p, views: +inp.value || 0 } }); toast("Saved") } catch (e) { toast(e.message, "bad") } }
-        const auto = ["instagram", "facebook", "youtube"].includes(p) && !v.manual
+        const auto = (["instagram", "facebook", "youtube"].includes(p) || (p === "tiktok" && tt.available && v.views > 0)) && !v.manual
         return el("span", { class: "chip", style: { padding: "4px 10px" } }, `${names[p]}: `,
           auto ? `${(v.views || 0).toLocaleString()} views${v.likes != null ? ` · ❤ ${v.likes}` : ""}${v.comments != null ? ` · 💬 ${v.comments}` : ""}` : inp,
           v.url ? el("a", { href: v.url, target: "_blank", rel: "noopener", text: " ↗" }) : null)
@@ -941,7 +1044,7 @@ async function morePage(view) {
   view.append(el("h2", { text: "Auto-posting" }), el("div", { class: "card col" },
     el("p", { class: "hint", style: { margin: 0 }, text: "After you approve a clip and its full-quality video is ready, it's posted to the platforms switched on here." }),
     Object.entries(accounts).map(([k, a]) => {
-      const t = el("input", { type: "checkbox", checked: a.autopost, disabled: !a.connected })
+      const t = el("input", { type: "checkbox", checked: a.autopost, disabled: !a.connected || (k === "tiktok" && a.direct) })
       t.onchange = async () => { try { await api("/accounts/autopost", { method: "PUT", json: { platform: k, on: t.checked } }); toast(t.checked ? `${names[k]}: auto-post on` : `${names[k]}: auto-post off`) } catch (e) { toast(e.message, "bad") } }
       let action = null
       if ((k === "tiktok" || k === "youtube") && a.can_connect) {
@@ -955,7 +1058,8 @@ async function morePage(view) {
           el("div", { class: "small muted", text: a.connected ? `Connected${a.username ? ` as ${k === "tiktok" ? "" : "@"}${a.username}` : ""}${a.expires ? " · token renews itself" : ""}` : "Not connected" }),
           el("div", { class: "small muted", text: a.note || "" }),
           a.error ? el("div", { class: "small", style: { color: "var(--bad)" }, text: a.error }) : null),
-        action, el("label", { class: "switch" }, t))
+        action, el("label", { class: "switch" }, t),
+        k === "tiktok" ? el("div", { style: { flexBasis: "100%" } }, tiktokChoices(a)) : null)
     })))
   view.append(el("h2", { text: "Status" }), el("div", { class: "card" },
     el("dl", { class: "kv" },

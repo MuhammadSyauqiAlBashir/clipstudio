@@ -114,7 +114,10 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
 - [ ] (Postponed) Twitch and Kick developer apps.
 - [ ] Channel/campaign list → Channels tab (in More since 2026-10-04). Campaign shortlist: `~/work/clipstudio-campaigns.md`
       (Clippo, TryBuzzer, AyoKlip, Whop).
-- [ ] TikTok production review: submitted 2026-10-04 with the edited demo videos; wait for the email.
+- [x] TikTok round 1 (inbox drafts) approved 2026-10-08; production keys saved, owner reconnects TikTok on the phone.
+- [ ] TikTok round 2 (Direct Post + video.list): record the demo with the Test app per
+      `~/work/clipstudio-tiktok-round2-review.md`, then submit the saved production revision. After approval: Claude
+      sets `tiktok_direct_approved`, owner reconnects (Approved app) and picks Direct Post.
 - Done 2026-10-04: interview; Groq + YouTube keys; Biznet traffic unlimited; throwaway cookies; review flow tested;
   test data deleted; brand **bashclipeveryday** (clip Gmail bashclip.everyday@gmail.com); Instagram Meta app + token.
 
@@ -225,3 +228,16 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   box). Live: clip pop-up redraws final/post status every 5 s while something is pending (video keeps playing);
   Review refreshes while a video is being made, Ready/Posted while renders/posts are moving; never while the app is
   in the background. Phone screenshots from a scratch server: `~/work/clip_shots.py` → `~/work/shots/clip/`. 51 tests.
+- 2026-10-09 — **TikTok round 1 approved** (production app live 2026-10-08: Login Kit + `video.upload`). Production keys
+  in `TIKTOK_CLIENT_KEY/SECRET`, sandbox keys in `TIKTOK_SANDBOX_CLIENT_KEY/SECRET`. Round 2 prepared: production
+  **revision** (Direct Post ON, scopes user.info.basic, video.upload, video.publish, video.list) saved, not yet
+  submitted; Sandbox has the same + "Apply changes". Built: two TikTok apps with separate logins (settings
+  `tiktok_app` production/sandbox, kv `tiktok_auth` / `tiktok_auth_sandbox`; the OAuth state remembers the app;
+  production asks only for approved scopes until `tiktok_direct_approved`), **Direct Post** (`tiktok_direct`): never
+  automatic — "Post to TikTok…" sheet per clip or per video group (creator_info name/avatar via `/api/tiktok/avatar`
+  proxy, privacy with no default, comment/duet/stitch off by default and greyed when the account disables them,
+  disclosure Your brand / Branded content with labels, branded ≠ Only me, Music Usage / Branded Content Policy consent,
+  max duration) → `posts.options` → `publish.tiktok_direct` (FILE_UPLOAD, status until PUBLISH_COMPLETE); private-only
+  until approved (`tiktok.private_only()`); `video.list` → hourly TikTok stats by video id + Stats card "Your latest
+  TikTok videos" (`/api/tiktok/videos`, 10-min cache). Guides: `~/work/clipstudio-tiktok-round2.md` (portal steps),
+  `~/work/clipstudio-tiktok-round2-review.md` (recording script + review texts). 53 tests.

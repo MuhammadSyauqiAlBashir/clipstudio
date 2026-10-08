@@ -38,8 +38,11 @@ KICK_CLIENT_SECRET = os.environ.get("KICK_CLIENT_SECRET", "")
 # Auto-posting (owner's own accounts only)
 IG_ACCESS_TOKEN = os.environ.get("IG_ACCESS_TOKEN", "")  # seed; refreshed copies live in the DB
 IG_APP_SECRET = os.environ.get("IG_APP_SECRET", "")
-TIKTOK_CLIENT_KEY = os.environ.get("TIKTOK_CLIENT_KEY", "")  # sandbox keys until TikTok approves the app
+TIKTOK_CLIENT_KEY = os.environ.get("TIKTOK_CLIENT_KEY", "")  # the approved (production) app
 TIKTOK_CLIENT_SECRET = os.environ.get("TIKTOK_CLIENT_SECRET", "")
+# The Sandbox app (same TikTok app, test side): builds and demos Direct Post before TikTok approves it there.
+TIKTOK_SANDBOX_CLIENT_KEY = os.environ.get("TIKTOK_SANDBOX_CLIENT_KEY", "")
+TIKTOK_SANDBOX_CLIENT_SECRET = os.environ.get("TIKTOK_SANDBOX_CLIENT_SECRET", "")
 YT_OAUTH_CLIENT_ID = os.environ.get("YT_OAUTH_CLIENT_ID", "")   # Google OAuth web client (project clipstudio-ai)
 YT_OAUTH_CLIENT_SECRET = os.environ.get("YT_OAUTH_CLIENT_SECRET", "")
 FB_PAGE_ID = os.environ.get("FB_PAGE_ID", "")        # Facebook Page bashclipeveryday

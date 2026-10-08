@@ -88,6 +88,8 @@ def next_slot(platform: str, now: float | None = None) -> float:
 def queue_for(clip_id: int):
     """Called when an approved clip's final is ready: one post per platform, in the next free schedule slot."""
     for p in PLATFORMS:
+        if p == "tiktok" and tiktok.direct_mode():
+            continue  # Direct Post needs the owner's choices for every post: "Post to TikTok" on the clip
         if autopost_enabled(p):
             slot = next_slot(p)
             db.execute("INSERT OR IGNORE INTO posts(clip_id, platform, status, not_before, scheduled, created_at, "
@@ -235,6 +237,29 @@ async def youtube_short(post: dict, clip: dict, caption: str, src: dict):
     return v["id"], v["url"]
 
 
+async def tiktok_direct(post: dict, clip: dict):
+    """Post straight to the profile with the owner's choices (posts.options), then wait until TikTok has published it."""
+    opts = db.jload(post["options"], {}) or {}
+    if not opts.get("privacy_level"):
+        raise PublishError("TikTok Direct Post needs your choices — open the clip and tap Post to TikTok.")
+    if not post["remote_id"]:
+        publish_id = await tiktok.direct_post(Path(clip["final"]), opts)
+        set_post(post["id"], remote_id=publish_id, status="processing")
+        raise Later(time.time() + 10, "TikTok is processing the video")
+    d = await tiktok.status_full(post["remote_id"])
+    st = d.get("status", "")
+    if st == "PUBLISH_COMPLETE":
+        ids = [str(i) for i in (d.get("publicaly_available_post_id") or d.get("publicly_available_post_id") or [])]
+        user = opts.get("username", "")
+        url = f"https://www.tiktok.com/@{user}/video/{ids[0]}" if ids and user else ""
+        return post["remote_id"], url
+    if st == "FAILED":
+        raise PublishError(f"TikTok refused the post: {d.get('fail_reason') or 'unknown reason'}")
+    if time.time() - post["updated_at"] > 1800:
+        raise PublishError("TikTok took more than 30 minutes to process the video.")
+    raise Later(time.time() + 15, "TikTok is processing the video")
+
+
 async def tiktok_draft(post: dict, clip: dict):
     """Upload to the TikTok inbox, then wait until TikTok has delivered the draft."""
     if not post["remote_id"]:
@@ -259,6 +284,16 @@ NAMES = {"instagram": "Instagram", "facebook": "Facebook", "tiktok": "TikTok", "
 def explain(platform: str, error: str) -> str:
     """A platform's error → a short named reason + what to do (the raw error stays in posts.error)."""
     p, e = NAMES.get(platform, platform.title()), (error or "").lower()
+    if "unaudited_client" in e:
+        return "TikTok only allows \"Only me\" posts until it approves Direct Post — choose Only me, or wait for the review."
+    if "privacy_level_option_mismatch" in e:
+        return "TikTok didn't accept that \"Who can see this\" choice for this account — pick another, then tap Retry."
+    if "spam_risk_too_many_posts" in e or "reached_active_user_cap" in e:
+        return "TikTok's daily posting limit for this account is reached — try again tomorrow."
+    if "spam_risk_user_banned_from_posting" in e:
+        return "TikTok has blocked posting on this account for now — check the TikTok app for a notice."
+    if "needs your choices" in e:
+        return "TikTok Direct Post needs your choices — open the clip and tap Post to TikTok."
     if "spam_risk_too_many_pending_share" in e:
         return "TikTok inbox full — too many unposted drafts. Post or delete them in TikTok, then tap Retry."
     if "limit how often" in e or "spam_risk" in e or "rate limit" in e or "too many" in e:
@@ -308,7 +343,8 @@ async def run_one() -> bool:
         if post["platform"] == "instagram":
             remote, url = await instagram(post, clip, caption)
         elif post["platform"] == "tiktok":
-            remote, url = await tiktok_draft(post, clip)
+            direct = (db.jload(post["options"], {}) or {}).get("mode") == "direct"
+            remote, url = await (tiktok_direct(post, clip) if direct else tiktok_draft(post, clip))
         elif post["platform"] == "youtube":
             remote, url = await youtube_short(post, clip, caption, src)
         elif post["platform"] == "facebook":
@@ -330,7 +366,12 @@ async def run_one() -> bool:
         await push.send(f"⚠️ {NAMES.get(post['platform'], post['platform'])} post failed", why[:150], url=f"/#clip/{clip['id']}")
         return True
     set_post(post["id"], status="done", remote_id=remote, url=url, posted_at=time.time(), error="")
-    if post["platform"] == "tiktok":  # a draft in the inbox: the owner posts it (and marks it posted) in the app
+    if post["platform"] == "tiktok" and (db.jload(post["options"], {}) or {}).get("mode") == "direct":
+        opts = db.jload(post["options"], {}) or {}
+        if opts.get("privacy_level") == "SELF_ONLY" or not url:  # private post: on the profile, visible only to you
+            db.event(f"Clip {clip['id']} posted on TikTok (only you can see it)", "publish")
+            return True
+    elif post["platform"] == "tiktok":  # a draft in the inbox: the owner posts it (and marks it posted) in the app
         db.event(f"Clip {clip['id']} sent to the TikTok inbox as a draft", "publish")
         from . import push
         await push.send("📥 TikTok draft ready", (clip["hook"] or "Your clip")[:90] + " — open TikTok to post it",

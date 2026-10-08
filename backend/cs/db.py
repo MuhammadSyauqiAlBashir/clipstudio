@@ -215,6 +215,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "auto_submit": True,            # submit posted campaign clips to Clippo when Clippo says they're eligible
     "pause_processing": False,      # owner's pause: don't start making clips from new videos
     "pause_posting": False,         # owner's pause: don't start final renders or posts
+    "tiktok_app": "production",     # which TikTok app the connection uses: production (approved) / sandbox (tests)
+    "tiktok_direct": False,         # post straight to the profile (needs video.publish) instead of inbox drafts
+    "tiktok_direct_approved": False,  # TikTok approved video.publish + video.list for the production app
 }
 
 _lock = threading.RLock()
@@ -253,7 +256,8 @@ def conn() -> sqlite3.Connection:
 # Columns added after the first deploy (CREATE TABLE IF NOT EXISTS doesn't add them to an existing DB).
 ADDED_COLUMNS = {
     "posts": {"stats": "TEXT NOT NULL DEFAULT '{}'", "stats_at": "REAL NOT NULL DEFAULT 0",
-              "scheduled": "INTEGER NOT NULL DEFAULT 0", "paused": "INTEGER NOT NULL DEFAULT 0"},
+              "scheduled": "INTEGER NOT NULL DEFAULT 0", "paused": "INTEGER NOT NULL DEFAULT 0",
+              "options": "TEXT NOT NULL DEFAULT '{}'"},  # TikTok Direct Post choices made by the owner
     "clips": {"submitted": "TEXT NOT NULL DEFAULT '{}'",  # {"instagram": unix time submitted to the campaign}
               "paused": "INTEGER NOT NULL DEFAULT 0"},  # owner paused this clip's final render
     "sources": {"campaign_id": "INTEGER", "paused": "INTEGER NOT NULL DEFAULT 0"},

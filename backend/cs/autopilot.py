@@ -2,7 +2,8 @@
 - a daily reminder: clips waiting for review + how long the posting queue lasts;
 - a weekly summary (Monday 09:00 WIB): posts and views of the last 7 days, best clip;
 - stats: Instagram Reel numbers every 6 hours (insights when the token has instagram_business_manage_insights,
-  otherwise likes + comments only). TikTok / YouTube numbers are typed in by the owner (their APIs need more scopes).
+  otherwise likes + comments only); Facebook and YouTube hourly; TikTok via video.list once TikTok approves it
+  (typed in by the owner until then).
 The owner's only daily job stays approving clips."""
 
 from __future__ import annotations
@@ -150,12 +151,33 @@ async def facebook_stats():
 
 async def sync_all():
     """Every platform whose numbers can be read automatically (TikTok needs another permission: typed in)."""
-    for fn in (instagram_stats, facebook_stats, youtube_visibility):
+    for fn in (instagram_stats, facebook_stats, youtube_visibility, tiktok_stats):
         try:
             await fn()
         except Exception:  # noqa: BLE001 - one platform failing must not stop the others
             log.exception("stats sync %s", fn.__name__)
     db.kv_set("stats_synced", time.time())
+
+
+async def tiktok_stats():
+    """TikTok numbers via video.list (once TikTok has approved it): matched by the video id in the post's link — from
+    a Direct Post, or the link the owner saved with Mark posted for an inbox draft."""
+    from . import tiktok
+    if not (tiktok.connected() and tiktok.has_scope("video.list")):
+        return
+    by_id = {str(v.get("id")): v for v in await tiktok.my_videos()}
+    if not by_id:
+        return
+    for p in db.all("SELECT p.*, c.posted cposted FROM posts p JOIN clips c ON c.id=p.clip_id "
+                    "WHERE p.platform='tiktok' AND p.status='done' AND p.posted_at>?", (time.time() - 90 * 86400,)):
+        vid = tiktok.video_id(p["url"]) or tiktok.video_id((db.jload(p["cposted"], {}) or {}).get("tiktok", ""))
+        v = by_id.get(vid)
+        if not v:
+            continue
+        stats = {"views": int(v.get("view_count") or 0), "likes": int(v.get("like_count") or 0),
+                 "comments": int(v.get("comment_count") or 0), "shares": int(v.get("share_count") or 0)}
+        db.update("posts", p["id"], {"stats": db.jdump(stats), "stats_at": time.time(),
+                                     **({"url": v.get("share_url") or p["url"]} if not p["url"] else {})})
 
 
 async def instagram_stats():
