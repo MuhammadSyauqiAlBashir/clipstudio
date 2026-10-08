@@ -253,8 +253,9 @@ def conn() -> sqlite3.Connection:
 # Columns added after the first deploy (CREATE TABLE IF NOT EXISTS doesn't add them to an existing DB).
 ADDED_COLUMNS = {
     "posts": {"stats": "TEXT NOT NULL DEFAULT '{}'", "stats_at": "REAL NOT NULL DEFAULT 0",
-              "scheduled": "INTEGER NOT NULL DEFAULT 0"},
-    "clips": {"submitted": "TEXT NOT NULL DEFAULT '{}'"},  # {"instagram": unix time submitted to the campaign}
+              "scheduled": "INTEGER NOT NULL DEFAULT 0", "paused": "INTEGER NOT NULL DEFAULT 0"},
+    "clips": {"submitted": "TEXT NOT NULL DEFAULT '{}'",  # {"instagram": unix time submitted to the campaign}
+              "paused": "INTEGER NOT NULL DEFAULT 0"},  # owner paused this clip's final render
     "sources": {"campaign_id": "INTEGER", "paused": "INTEGER NOT NULL DEFAULT 0"},
 }
 

@@ -290,7 +290,7 @@ async def run_one() -> bool:
                       "LIMIT 1", (time.time(),))
     else:
         post = db.one("SELECT p.* FROM posts p JOIN clips c ON c.id=p.clip_id JOIN sources s ON s.id=c.source_id "
-                      "WHERE (p.status IN ('uploading','processing') OR (p.status='queued' AND s.paused=0)) "
+                      "WHERE (p.status IN ('uploading','processing') OR (p.status='queued' AND s.paused=0 AND p.paused=0)) "
                       "AND p.not_before<=? ORDER BY p.id LIMIT 1", (time.time(),))
     if not post:
         return False

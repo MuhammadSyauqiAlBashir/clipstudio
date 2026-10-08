@@ -356,29 +356,38 @@ async def queue_state(s: Session = Depends(current)):
         waiting = not working and bool(job) and (job["not_before"] or 0) > now
         state = source_state(src, job)
         making.append({"id": src["id"], "title": src["title"] or "Video", "creator": src["creator"], "working": working,
+                       "can_pause": not working,
                        "waiting": waiting, "paused": bool(src["paused"]), "label": state["label"], "state": state["text"],
                        "progress": src["progress"] if working else None})
+
     def final_state(c: dict) -> str:
         if c["status"] == "rendering":
             return "Making the full-quality 1080×1920 video now"
+        if c["cpaused"]:
+            return "Paused by you (this clip)"
         if c["paused"]:
-            return "Paused by you (this video) — resume it on the Ready page"
+            return "Paused by you (its whole video)"
         if st.get("pause_posting"):
             return "Waiting — final videos and posting are paused (Ready page → Resume)"
         return "Waiting — the full-quality video is made next (before any new video is processed)"
     finals = [{"clip_id": c["id"], "hook": c["hook"], "source": c["title"] or "", "working": c["status"] == "rendering",
-               "paused": bool(c["paused"]), "state": final_state(c)}
-              for c in db.all("SELECT c.id, c.hook, c.status, s.title, s.paused FROM clips c JOIN sources s ON s.id=c.source_id "
+               "paused": bool(c["paused"] or c["cpaused"]), "can_pause": c["status"] != "rendering",
+               "source_id": c["source_id"], "src_paused": bool(c["paused"]), "state": final_state(c)}
+              for c in db.all("SELECT c.id, c.hook, c.status, c.paused cpaused, c.source_id, s.title, s.paused FROM clips c "
+                              "JOIN sources s ON s.id=c.source_id "
                               "WHERE c.status IN ('approved','rendering') ORDER BY c.status='rendering' DESC, c.updated_at")]
     posts = []
-    for p in db.all("SELECT p.id, p.clip_id, p.platform, p.status, p.not_before, p.error, c.hook, s.paused FROM posts p "
+    for p in db.all("SELECT p.id, p.clip_id, p.platform, p.status, p.not_before, p.error, p.paused ppaused, c.hook, "
+                    "c.source_id, s.paused FROM posts p "
                     "JOIN clips c ON c.id=p.clip_id JOIN sources s ON s.id=c.source_id "
                     "WHERE p.status IN ('queued','uploading','processing') ORDER BY p.status='queued', p.not_before, p.id"):
         when = datetime.fromtimestamp(p["not_before"], config.TZ).strftime("%a %H:%M") if p["not_before"] > now else ""
         state = {"uploading": "Uploading now…", "processing": "Uploaded — the platform is processing it…"}.get(p["status"])
         if not state:
-            if p["paused"]:
-                state = "Paused by you (this video)"
+            if p["ppaused"]:
+                state = "Paused by you (this post)"
+            elif p["paused"]:
+                state = "Paused by you (its whole video)"
             elif st.get("pause_posting"):
                 state = "Posting is paused (Ready page → Resume)"
             elif when:
@@ -388,7 +397,9 @@ async def queue_state(s: Session = Depends(current)):
         if p["platform"] == "tiktok" and p["status"] == "queued":
             state += " · goes to your TikTok inbox as a draft"
         posts.append({"id": p["id"], "clip_id": p["clip_id"], "platform": p["platform"], "hook": p["hook"],
-                      "working": p["status"] != "queued", "paused": bool(p["paused"]), "state": state})
+                      "working": p["status"] != "queued", "paused": bool(p["paused"] or p["ppaused"]),
+                      "can_pause": p["status"] == "queued", "source_id": p["source_id"], "src_paused": bool(p["paused"]),
+                      "state": state})
     return {"pause_processing": bool(st.get("pause_processing")), "pause_posting": bool(st.get("pause_posting")),
             "making": making, "finals": finals, "posts": posts,
             "queued": {"process": len(making), "final": len(finals), "posts": len(posts)},
@@ -411,6 +422,26 @@ async def pause_queue(body: PauseIn, s: Session = Depends(current)):
 
 class SourcePauseIn(BaseModel):
     paused: bool
+
+
+@app.put("/api/clips/{cid}/pause")
+async def pause_clip(cid: int, body: SourcePauseIn, s: Session = Depends(current)):
+    """Hold (or release) one approved clip's final render; a render already running finishes."""
+    c = get_clip(cid)
+    db.update("clips", cid, {"paused": int(body.paused)})
+    db.event(f"{'Paused' if body.paused else 'Resumed'} the final render of clip {cid} ({s.username})", "queue")
+    return {"ok": True, "paused": body.paused, "status": c["status"]}
+
+
+@app.put("/api/posts/{pid}/pause")
+async def pause_post(pid: int, body: SourcePauseIn, s: Session = Depends(current)):
+    """Hold (or release) one waiting post; an upload already in progress finishes."""
+    p = db.one("SELECT * FROM posts WHERE id=?", (pid,))
+    if not p:
+        raise HTTPException(404, "Post not found.")
+    db.execute("UPDATE posts SET paused=?, updated_at=? WHERE id=?", (int(body.paused), db.now(), pid))
+    db.event(f"{'Paused' if body.paused else 'Resumed'} the {p['platform']} post of clip {p['clip_id']} ({s.username})", "queue")
+    return {"ok": True, "paused": body.paused}
 
 
 @app.put("/api/sources/{sid}/pause")

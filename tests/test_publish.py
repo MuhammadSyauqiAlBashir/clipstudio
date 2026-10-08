@@ -266,3 +266,32 @@ def test_failures_stop_at_once_with_a_named_reason(state, monkeypatch):
     assert ex("facebook", "Cannot call API for app 1 on behalf of user 2").startswith("Meta blocked the app")
     assert ex("instagram", "Instagram rejected the video: Video download failed (Fwdproxy)").startswith("Instagram couldn't fetch")
     assert "Retry" in ex("youtube", "something new")
+
+
+def test_single_post_and_clip_pause(state, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from cs import db, main, publish, worker
+    cid = make_clip(state)
+    publish.queue_for(cid)
+    pid = db.one("SELECT id FROM posts WHERE clip_id=?", (cid,))["id"]
+    main.app.dependency_overrides[main.current] = lambda: main.Session({"username": "bashirsyauqi"}, "t")
+    with TestClient(main.app, headers={"X-CS": "1"}) as c:
+        assert c.put(f"/api/posts/{pid}/pause", json={"paused": True}).status_code == 200
+        q = c.get("/api/queue").json()
+        row = next(p for p in q["posts"] if p["id"] == pid)
+        assert row["paused"] and row["can_pause"] and "this post" in row["state"]
+        assert not asyncio.run(publish.run_one())  # a paused post is skipped
+        assert c.put(f"/api/posts/{pid}/pause", json={"paused": False}).status_code == 200
+        # one clip's final render can be held too
+        now = db.now()
+        a = db.insert("clips", {"source_id": db.one("SELECT source_id FROM clips WHERE id=?", (cid,))["source_id"], "start": 0,
+                                "end": 20, "status": "approved", "created_at": now, "updated_at": now})
+        db.enqueue("final", clip_id=a, priority=30)
+        assert c.put(f"/api/clips/{a}/pause", json={"paused": True}).status_code == 200
+        assert worker.next_job(("final",)) is None
+        fin = next(f for f in c.get("/api/queue").json()["finals"] if f["clip_id"] == a)
+        assert fin["paused"] and "this clip" in fin["state"]
+        c.put(f"/api/clips/{a}/pause", json={"paused": False})
+        assert worker.next_job(("final",))["clip_id"] == a
+    main.app.dependency_overrides.clear()
