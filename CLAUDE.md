@@ -218,3 +218,10 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   unposted inbox drafts (~5 per 24 h; we only space posts 90 s). **Owner: no automatic retries for posts** — a failure
   stops at once as `failed`; `publish.explain()` turns the raw error into a named reason + what to do (shown on the
   clip and Ready card, raw text under "Details", push + activity log). Instagram's download auto-retry removed too.
+- 2026-10-08 — Queue rows each get their own pause/resume button (cherry-pick): video rows → `sources.paused`, final
+  renders → new `clips.paused` (worker skips), posts → new `posts.paused` (publish skips); a row paused via its whole
+  video resumes the video; running items have no button (the step finishes). Small preview = own player
+  (`previewPlayer`: tap play/pause, tap-to-seek bar, **fullscreen top-right** — iOS's own button sat under the select
+  box). Live: clip pop-up redraws final/post status every 5 s while something is pending (video keeps playing);
+  Review refreshes while a video is being made, Ready/Posted while renders/posts are moving; never while the app is
+  in the background. Phone screenshots from a scratch server: `~/work/clip_shots.py` → `~/work/shots/clip/`. 51 tests.

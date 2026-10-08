@@ -78,7 +78,7 @@ function autoRefresh(ms) {
   clearTimeout(refreshTimer)
   refreshTimer = setTimeout(() => {
     const playing = [...document.querySelectorAll("video")].some((v) => !v.paused)
-    if (document.querySelector("dialog[open]") || playing) autoRefresh(ms)
+    if (document.hidden || document.querySelector("dialog[open]") || playing) autoRefresh(ms)
     else render()
   }, ms)
 }
@@ -144,13 +144,33 @@ function signals(c) {
     c.layout ? el("span", { class: "chip", text: { track: "🎯 tracking", split: "👥 split", general: "🖼 full frame", vertical: "📱 vertical" }[c.layout] || c.layout }) : null)
 }
 
+// Small inline player with its own controls: tap = play/pause, tap the bar = jump, fullscreen at the top right
+// (the iPhone's own fullscreen button sits top-left, under the select box).
+function previewPlayer(src) {
+  const v = el("video", { src, playsinline: true, autoplay: true, preload: "auto", disableremoteplayback: true })
+  const fill = el("i")
+  const bar = el("div", { class: "pv-bar" }, fill)
+  const play = el("span", { class: "pv-play", hidden: true }, svgIcon("play"))
+  const fs = el("button", { class: "pv-fs", type: "button", "aria-label": "Full screen" }, svgIcon("expand"))
+  const box = el("div", { class: "pv" }, v, play, fs, bar)
+  v.onclick = () => (v.paused ? v.play() : v.pause())
+  play.onclick = () => v.play()
+  v.onplay = () => { play.hidden = true }
+  v.onpause = () => { play.hidden = false }
+  v.ontimeupdate = () => { fill.style.width = `${v.duration ? (v.currentTime / v.duration) * 100 : 0}%` }
+  bar.onclick = (e) => { const r = bar.getBoundingClientRect(); if (v.duration) v.currentTime = ((e.clientX - r.left) / r.width) * v.duration }
+  fs.onclick = (e) => {
+    e.stopPropagation()
+    if (v.webkitEnterFullscreen) v.webkitEnterFullscreen()
+    else if (v.requestFullscreen) v.requestFullscreen()
+  }
+  return box
+}
+
 function poster(c) {
   const b = el("button", { class: "poster", type: "button", "aria-label": "Play" },
     el("img", { src: `/api/clips/${c.id}/thumb.jpg`, alt: "", loading: "lazy" }), el("span", { text: "▶" }))
-  b.onclick = () => {
-    const v = el("video", { src: `/api/clips/${c.id}/preview.mp4`, controls: true, playsinline: true, autoplay: true })
-    b.replaceWith(v)
-  }
+  b.onclick = () => b.replaceWith(previewPlayer(`/api/clips/${c.id}/preview.mp4`))
   return c.has_preview ? b : el("div", { class: "poster", style: { display: "grid", placeItems: "center", color: "#fff" }, text: "—" })
 }
 
@@ -244,16 +264,40 @@ function bySourceGroups(clips) {
 
 const PLATFORM_SHORT = { instagram: ["IG", "#c13584"], facebook: ["FB", "#1877f2"], tiktok: ["TT", "#111"], youtube: ["YT", "#e00"] }
 
-function queueRow(icon, title, sub, it) {
+function queueRow(icon, title, sub, it, action = null) {
   return el("div", { class: `qrow${it.working ? " working" : ""}${it.paused ? " paused" : ""}` }, icon,
     el("div", { class: "grow", style: { minWidth: 0 } },
       el("div", { class: "qtitle", text: title }),
-      el("div", { class: "qsub", text: (it.paused && !it.label ? "⏸ Paused · " : "") + sub }),
-      it.progress != null ? el("div", { class: "progress" }, el("i", { style: { width: `${Math.round(it.progress * 100)}%` } })) : null))
+      el("div", { class: "qsub", text: (it.paused && !it.label && !/paused/i.test(sub) ? "⏸ Paused · " : "") + sub }),
+      it.progress != null ? el("div", { class: "progress" }, el("i", { style: { width: `${Math.round(it.progress * 100)}%` } })) : null),
+    action)
 }
 
+// One item's own pause / resume button. A row paused because its whole video is paused resumes the video.
+// Items already being worked on have no button: the running step always finishes.
+function rowPause(what, it) {
+  if (!it.can_pause) return null
+  const viaVideo = what !== "video" && it.src_paused
+  const paused = viaVideo || it.paused
+  const url = what === "video" || viaVideo ? `/sources/${what === "video" ? it.id : it.source_id}/pause`
+    : what === "final" ? `/clips/${it.clip_id}/pause` : `/posts/${it.id}/pause`
+  const label = paused ? (viaVideo ? "Resume video" : "Resume") : "Pause"
+  const b = el("button", { class: `btn sm qbtn${paused ? " on" : ""}`, type: "button", "aria-label": label, title: label }, svgIcon(paused ? "play" : "pause"))
+  b.onclick = (e) => {
+    e.stopPropagation()
+    busy(b, async () => {
+      await api(url, { method: "PUT", json: { paused: !paused } })
+      toast(paused ? "Resumed" : what === "post" ? "Paused — this post waits until you resume it" : "Paused — it waits until you resume it")
+      render()
+    }).catch(() => {})
+  }
+  return b
+}
+
+let lastQueue = null
 async function queuePanel(what) {
   const q = await api("/queue")
+  lastQueue = q
   const paused = what === "processing" ? q.pause_processing : q.pause_posting
   const making = what === "processing"
   const items = making ? q.making : [...q.finals, ...q.posts]
@@ -269,12 +313,12 @@ async function queuePanel(what) {
   try { open = localStorage.getItem(key) === "1" } catch (_) {}
   const list = el("div", { class: "qlist", hidden: !open || !items.length })
   if (making) {
-    for (const it of q.making) list.append(queueRow(el("span", { class: "qicon", text: it.working ? "⚙️" : it.waiting ? "⏳" : "🎞" }), it.title, `${it.label} — ${it.state}`, it))
+    for (const it of q.making) list.append(queueRow(el("span", { class: "qicon", text: it.working ? "⚙️" : it.waiting ? "⏳" : "🎞" }), it.title, `${it.label} — ${it.state}`, it, rowPause("video", it)))
   } else {
-    for (const it of q.finals) list.append(queueRow(el("span", { class: "qicon", text: it.working ? "⚙️" : "🎬" }), it.hook || `Clip ${it.clip_id}`, `${it.state} · ${it.source}`, it))
+    for (const it of q.finals) list.append(queueRow(el("span", { class: "qicon", text: it.working ? "⚙️" : "🎬" }), it.hook || `Clip ${it.clip_id}`, `${it.state} · ${it.source}`, it, rowPause("final", it)))
     for (const it of q.posts) {
       const [abbr, color] = PLATFORM_SHORT[it.platform] || [it.platform.slice(0, 2).toUpperCase(), "#666"]
-      list.append(queueRow(el("span", { class: "qbadge", style: { background: color }, text: abbr }), it.hook || `Clip ${it.clip_id}`, it.state, it))
+      list.append(queueRow(el("span", { class: "qbadge", style: { background: color }, text: abbr }), it.hook || `Clip ${it.clip_id}`, it.state, it, rowPause("post", it)))
     }
   }
   const chev = svgIcon("chev", "ico chev")
@@ -313,6 +357,7 @@ async function reviewPage(view) {
   const toggle = el("div", { class: "seg" }, [["source", "By video (in order)"], ["score", "By score"]].map(([k, l]) =>
     el("button", { class: `btn sm ${(bySource ? "source" : "score") === k ? "on" : ""}`, type: "button", text: l, onclick: () => { try { localStorage.setItem("reviewOrder", k) } catch (_) {} render() } })))
   view.append(el("div", { class: "topbar" }, el("h1", { text: "Review" }), el("span", { class: "muted small", text: `${clips.length} waiting` })), await queuePanel("processing"), toggle)
+  if (lastQueue && lastQueue.making.some((i) => i.working)) autoRefresh(8000)  // new clips appear by themselves
   if (!clips.length) {
     view.append(el("div", { class: "empty" }, el("b", { text: "🍿" }), "Nothing to review yet.", el("br"), el("a", { href: "#sources", text: "Add a video link" })))
     return
@@ -383,7 +428,7 @@ async function readyPage(view) {
   if (filter === "approved") for (const [sid, list] of bySourceGroups(clips)) view.append(groupBox("ready", sid, list, readyCard))
   else if (filter === "posted") for (const [sid, list] of bySourceGroups(clips)) view.append(groupBox("posted", sid, list, readyCard, [], { pause: false }))
   else for (const c of clips) view.append(readyCard(c))
-  if (busyNow) autoRefresh(8000)
+  if (busyNow || (lastQueue && [...lastQueue.finals, ...lastQueue.posts].some((i) => i.working || (!i.paused && !String(i.state).startsWith("Scheduled"))))) autoRefresh(8000)
 }
 
 async function shareOrDownload(c, btn) {
@@ -404,46 +449,80 @@ async function shareOrDownload(c, btn) {
 async function openClip(id) {
   let c, accounts
   try { c = (await api(`/clips/${id}`)).clip; accounts = (await api("/accounts")).accounts } catch (e) { toast(e.message, "bad"); return }
-  const { body, close } = sheet(c.hook || "Clip", { onClose: render })
+  let timer = null
+  const { body, close } = sheet(c.hook || "Clip", { onClose: () => { clearTimeout(timer); render() } })
   const src = c.has_final ? `/api/clips/${c.id}/final.mp4` : c.has_preview ? `/api/clips/${c.id}/preview.mp4` : null
+  const finalBox = el("div")
+  const plats = el("div")
   body.append(el("div", { class: "small muted", style: { margin: "-2px 0 8px" } }, el("b", { text: `Clip #${c.id}` }), c.source.title ? ` · ${c.source.title}` : ""),
-    src ? el("video", { class: "big-video", src, controls: true, playsinline: true }) : null)
-  if (c.has_final) {
-    const share = el("button", { class: "btn primary", type: "button", text: "📲 Save / share video" })
-    share.onclick = () => shareOrDownload(c, share)
-    body.append(el("div", { class: "btns" }, share, el("a", { class: "btn", href: `/api/clips/${c.id}/final.mp4?download=1`, text: `⬇️ Download (${mb(c.final_size)})` })),
-      el("p", { class: "hint", text: "On iPhone: Save / share → Save Video puts it in Photos; or share straight to TikTok/Instagram." }))
-  } else if (c.status === "approved" || c.status === "rendering") {
-    body.append(el("p", { class: "muted", text: "The full-quality version is being made. You'll get a notification." }))
+    src ? el("video", { class: "big-video", src, controls: true, playsinline: true }) : null, finalBox, plats)
+
+  const drawFinal = () => {
+    if (c.has_final) {
+      const share = el("button", { class: "btn primary", type: "button", text: "📲 Save / share video" })
+      share.onclick = () => shareOrDownload(c, share)
+      finalBox.replaceChildren(el("div", { class: "btns" }, share, el("a", { class: "btn", href: `/api/clips/${c.id}/final.mp4?download=1`, text: `⬇️ Download (${mb(c.final_size)})` })),
+        el("p", { class: "hint", text: "On iPhone: Save / share → Save Video puts it in Photos; or share straight to TikTok/Instagram." }))
+    } else if (c.status === "approved" || c.status === "rendering") {
+      finalBox.replaceChildren(el("p", { class: "muted", text: c.status === "rendering" ? "⚙️ Making the full-quality version now…" : "⏳ Waiting to make the full-quality version…" }))
+    } else finalBox.replaceChildren()
   }
-  for (const [p, label] of [["tiktok", "TikTok"], ["youtube", "YouTube Shorts"], ["instagram", "Instagram Reels"], ["facebook", "Facebook Reels"]]) {
-    const copy = el("button", { class: "btn sm", type: "button", text: "Copy" })
-    copy.onclick = () => copyText(copy, c.captions[p], `${label} caption copied`)
-    const mark = el("button", { class: "btn sm", type: "button", text: c.posted[p] ? "✓ Posted" : "Mark posted" })
-    mark.onclick = async () => {
-      const link = prompt(`Link to the ${label} post (optional):`, c.posted[p] && c.posted[p] !== "posted" ? c.posted[p] : "")
-      if (link === null) return
-      try { c = (await api(`/clips/${c.id}/posted`, { method: "POST", json: { platform: p, url: link } })).clip; mark.textContent = "✓ Posted"; toast("Saved") } catch (e) { toast(e.message, "bad") }
+
+  const drawPlatforms = () => {
+    plats.replaceChildren()
+    for (const [p, label] of [["tiktok", "TikTok"], ["youtube", "YouTube Shorts"], ["instagram", "Instagram Reels"], ["facebook", "Facebook Reels"]]) {
+      const copy = el("button", { class: "btn sm", type: "button", text: "Copy" })
+      copy.onclick = () => copyText(copy, c.captions[p], `${label} caption copied`)
+      const mark = el("button", { class: "btn sm", type: "button", text: c.posted[p] ? "✓ Posted" : "Mark posted" })
+      mark.onclick = async () => {
+        const link = prompt(`Link to the ${label} post (optional):`, c.posted[p] && c.posted[p] !== "posted" ? c.posted[p] : "")
+        if (link === null) return
+        try { c = (await api(`/clips/${c.id}/posted`, { method: "POST", json: { platform: p, url: link } })).clip; toast("Saved"); drawPlatforms() } catch (e) { toast(e.message, "bad") }
+      }
+      const post = (c.posts || {})[p]
+      const when = (t) => new Date(t * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })
+      const scheduled = post && post.status === "queued" && post.at * 1000 > Date.now()
+      const st = post ? { queued: scheduled ? `🗓 Scheduled for ${when(post.at)}` : "⏳ Waiting to post", uploading: "⬆️ Uploading…", processing: "⚙️ Processing on the platform…",
+        done: p === "tiktok" ? "📥 Sent to your TikTok inbox — open TikTok to post it, then tap Mark posted" : "✅ Posted automatically",
+        failed: `⚠️ ${post.reason || "Failed"}` }[post.status] : ""
+      const pub = el("button", { class: "btn sm primary", type: "button", text: post && post.status === "failed" ? "Retry" : "Post now" })
+      const views = post && post.status === "done" ? (post.stats.views ?? post.stats.reach) : undefined
+      pub.onclick = () => busy(pub, async () => { c = (await api(`/clips/${c.id}/publish`, { method: "POST", json: { platform: p } })).clip; toast("Posting…"); drawPlatforms(); live() }).catch(() => {})
+      const canPost = c.has_final && (!post || post.status === "failed" || scheduled) && !(c.posted || {})[p] && accounts && accounts[p] && accounts[p].connected
+      plats.append(el("div", { class: "card", style: { marginTop: "10px" } },
+        el("div", { class: "row" }, el("b", { class: "grow", text: label }), canPost ? pub : null, copy, c.has_final && !(post && post.status === "done" && p !== "tiktok") ? mark : null),
+        st ? el("div", { class: "small", style: { marginTop: "4px", color: post.status === "failed" ? "var(--bad)" : "inherit" } }, st,
+          post.url ? el("span", {}, " · ", el("a", { href: post.url, target: "_blank", rel: "noopener", text: "open" })) : null,
+          views !== undefined ? ` · 👁 ${views.toLocaleString()} views` : "",
+          post.status === "failed" && post.error ? el("details", { class: "muted", style: { marginTop: "4px" } }, el("summary", { text: "Details" }), el("div", { text: post.error })) : null,
+          post.stats && post.stats.locked ? el("div", { style: { color: "var(--bad)" }, text: "🔒 YouTube locked it as private (Google's audit not passed yet) — share it from the phone" }) : null) : null,
+        el("pre", { class: "caption", text: c.captions[p] })))
     }
-    const post = (c.posts || {})[p]
-    const when = (t) => new Date(t * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })
-    const scheduled = post && post.status === "queued" && post.at * 1000 > Date.now()
-    const st = post ? { queued: scheduled ? `🗓 Scheduled for ${when(post.at)}` : "⏳ Waiting to post", uploading: "⬆️ Uploading…", processing: "⚙️ Processing on the platform…",
-      done: p === "tiktok" ? "📥 Sent to your TikTok inbox — open TikTok to post it, then tap Mark posted" : "✅ Posted automatically",
-      failed: `⚠️ ${post.reason || "Failed"}` }[post.status] : ""
-    const pub = el("button", { class: "btn sm primary", type: "button", text: post && post.status === "failed" ? "Retry" : "Post now" })
-    const views = post && post.status === "done" ? (post.stats.views ?? post.stats.reach) : undefined
-    pub.onclick = () => busy(pub, async () => { c = (await api(`/clips/${c.id}/publish`, { method: "POST", json: { platform: p } })).clip; pub.remove(); toast("Posting…") }).catch(() => {})
-    const canPost = c.has_final && (!post || post.status === "failed" || scheduled) && !(c.posted || {})[p] && accounts && accounts[p] && accounts[p].connected
-    body.append(el("div", { class: "card", style: { marginTop: "10px" } },
-      el("div", { class: "row" }, el("b", { class: "grow", text: label }), canPost ? pub : null, copy, c.has_final && !(post && post.status === "done" && p !== "tiktok") ? mark : null),
-      st ? el("div", { class: "small", style: { marginTop: "4px", color: post.status === "failed" ? "var(--bad)" : "inherit" } }, st,
-        post.url ? el("span", {}, " · ", el("a", { href: post.url, target: "_blank", rel: "noopener", text: "open" })) : null,
-        views !== undefined ? ` · 👁 ${views.toLocaleString()} views` : "",
-        post.status === "failed" && post.error ? el("details", { class: "muted", style: { marginTop: "4px" } }, el("summary", { text: "Details" }), el("div", { text: post.error })) : null,
-        post.stats && post.stats.locked ? el("div", { style: { color: "var(--bad)" }, text: "🔒 YouTube locked it as private (Google's audit not passed yet) — share it from the phone" }) : null) : null,
-      el("pre", { class: "caption", text: c.captions[p] })))
   }
+
+  // Live: while the final is being made or a post is on its way, re-read the clip every 5 s and redraw only what changed.
+  const pending = () => c.status === "approved" || c.status === "rendering" || Object.values(c.posts || {}).some((v) => ["queued", "uploading", "processing"].includes(v.status))
+  const live = () => {
+    clearTimeout(timer)
+    if (!pending()) return
+    timer = setTimeout(async () => {
+      if (!body.isConnected) return
+      if (document.hidden) { live(); return }
+      try {
+        const n = (await api(`/clips/${c.id}`)).clip
+        const changed = JSON.stringify([n.status, n.has_final, n.posts, n.posted]) !== JSON.stringify([c.status, c.has_final, c.posts, c.posted])
+        const finalNow = n.has_final && !c.has_final
+        c = n
+        if (changed) { drawFinal(); drawPlatforms() }
+        if (finalNow) toast("Full-quality video is ready ✅")
+      } catch (_) {}
+      live()
+    }, 5000)
+  }
+
+  drawFinal()
+  drawPlatforms()
+  live()
   const edit = el("button", { class: "btn", type: "button", text: "✏️ Edit text" })
   edit.onclick = () => { close(); editSheet(c, render) }
   body.append(el("div", { class: "btns" }, edit,

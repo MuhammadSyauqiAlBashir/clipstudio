@@ -30,6 +30,7 @@ def next_job(kinds: tuple[str, ...]) -> dict | None:
     return db.one(f"SELECT j.* FROM jobs j LEFT JOIN clips c ON c.id=j.clip_id "
                   f"LEFT JOIN sources s ON s.id=COALESCE(j.source_id, c.source_id) "
                   f"WHERE j.status='queued' AND j.kind IN ({marks}) AND j.not_before<=? AND COALESCE(s.paused, 0)=0 "
+                  "AND COALESCE(c.paused, 0)=0 "
                   "ORDER BY j.priority DESC, j.id LIMIT 1", (*kinds, time.time()))
 
 
