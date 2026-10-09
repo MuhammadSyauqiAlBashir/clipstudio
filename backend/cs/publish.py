@@ -284,6 +284,9 @@ NAMES = {"instagram": "Instagram", "facebook": "Facebook", "tiktok": "TikTok", "
 def explain(platform: str, error: str) -> str:
     """A platform's error → a short named reason + what to do (the raw error stays in posts.error)."""
     p, e = NAMES.get(platform, platform.title()), (error or "").lower()
+    if "unaudited_client_can_only_post_to_private_accounts" in e:
+        return ("Until TikTok approves Direct Post, your TikTok account must be Private: TikTok → Profile → ☰ → "
+                "Settings and privacy → Privacy → Private account ON, then post again with Only me.")
     if "unaudited_client" in e:
         return "TikTok only allows \"Only me\" posts until it approves Direct Post — choose Only me, or wait for the review."
     if "privacy_level_option_mismatch" in e:

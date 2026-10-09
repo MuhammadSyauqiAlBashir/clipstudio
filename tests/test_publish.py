@@ -376,7 +376,7 @@ def test_tiktok_direct_post_rules_and_flow(state, monkeypatch):
     assert db.jload(db.one("SELECT stats FROM posts WHERE platform='tiktok'")["stats"], {})["views"] == 1500
     assert tiktok.video_id("https://www.tiktok.com/@x/video/99?lang=en") == "99" and tiktok.video_id("nope") == ""
     assert tiktok.avatar_allowed("https://p16-sign-va.tiktokcdn.com/a.jpeg") and not tiktok.avatar_allowed("https://evil.com/x")
-    assert publish.explain("tiktok", "TikTok 403: unaudited_client_can_only_post_to_private_accounts").startswith("TikTok only allows")
+    assert "Private account ON" in publish.explain("tiktok", "TikTok 403: unaudited_client_can_only_post_to_private_accounts")
 
 
 def test_tiktok_videos_endpoint(state, monkeypatch):
