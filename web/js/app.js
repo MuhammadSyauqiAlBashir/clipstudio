@@ -700,9 +700,10 @@ async function sourcesPage(view) {
 
 async function sourcePage(view, id) {
   const { source: s, clips } = await api(`/sources/${id}`)
-  view.append(el("a", { href: "#sources", class: "small", text: "← Sources" }), sourceRow(s))
+  view.append(el("a", { href: "#sources", class: "small", text: "← Sources" }), sourceRow(s),
+    s.status === "failed" && s.reason ? el("details", { class: "small muted", style: { margin: "-4px 0 10px" } }, el("summary", { text: "Details" }), el("pre", { class: "caption", text: s.reason })) : null)
   const acts = el("div", { class: "btns" })
-  if (s.status === "failed") acts.append(el("button", { class: "btn", type: "button", text: "↻ Retry", onclick: (e) => busy(e.target, async () => { await api(`/sources/${id}/retry`, { method: "POST" }); render() }).catch(() => {}) }))
+  if (s.status === "failed") acts.append(el("button", { class: "btn primary", type: "button", text: "↻ Retry", onclick: (e) => busy(e.target, async () => { await api(`/sources/${id}/retry`, { method: "POST" }); toast("Trying again — it starts in a moment"); render() }).catch(() => {}) }))
   if (s.url) acts.append(el("a", { class: "btn", href: s.url, target: "_blank", rel: "noopener", text: "Open original" }))
   acts.append(el("button", { class: "btn bad", type: "button", text: "Delete", onclick: async (e) => {
     if (!confirm("Delete this source and all its clips?")) return

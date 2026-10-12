@@ -253,8 +253,31 @@ def test_source_state_says_what_happens():
     s = main.source_state(src(status="queued"), {**run, "id": jid, "status": "queued", "priority": 0})
     assert s["label"] == "🕒 In line" and ("Starts in a few seconds" in s["text"] or "in line" in s["text"])
     s = main.source_state(src(status="failed", reason="Video unavailable."), None)
-    assert s["kind"] == "bad" and "Retry" in s["text"]
+    assert s["kind"] == "bad" and "isn't available" in s["text"]
+    s = main.source_state(src(status="failed", reason="Gemini said no."), None)
+    assert "Gemini said no." in s["text"] and "Retry" in s["text"]
     s = main.source_state(src(status="rejected_by_gate", reason="Too short to clip (under 1 minute)."), None)
     assert s["label"] == "🚫 Refused" and "Too short" in s["text"]
     s = main.source_state(src(status="review"), None, {"review": 3})
     assert s["text"] == "3 clips waiting for your review."
+
+
+def test_failed_download_can_be_retried_after_cleanup():
+    from fastapi.testclient import TestClient
+
+    from cs import db, main
+    now = db.now()
+    sid = db.insert("sources", {"title": "T", "status": "failed", "files_deleted": 1, "platform": "youtube",
+                                "reason": "ERROR: unable to download video data: HTTP Error 403: Forbidden",
+                                "created_at": now, "updated_at": now})
+    st = main.source_state(db.one("SELECT * FROM sources WHERE id=?", (sid,)), None)
+    assert "error 403" in st["text"] and "Retry" in st["text"]
+    main.app.dependency_overrides[main.current] = lambda: main.Session({"username": "bashirsyauqi"}, "t")
+    with TestClient(main.app, headers={"X-CS": "1"}) as c:
+        assert c.post(f"/api/sources/{sid}/retry").status_code == 200
+        assert c.post(f"/api/sources/{sid}/retry").status_code == 400  # not failed any more
+    main.app.dependency_overrides.clear()
+    s = db.one("SELECT status, files_deleted FROM sources WHERE id=?", (sid,))
+    assert s == {"status": "queued", "files_deleted": 0}
+    assert db.one("SELECT 1 FROM jobs WHERE source_id=? AND status='queued'", (sid,))
+    assert main.fetch_reason("ERROR: [youtube] x: Private video. Sign in") == "The video is private."
