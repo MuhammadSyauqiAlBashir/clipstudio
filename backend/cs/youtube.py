@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import secrets
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -19,7 +21,7 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
 SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 UPLOAD_UNITS = 1600
-DAILY_UPLOADS = 6  # 6 × 1,600 = 9,600 of the shared 9,800-unit budget (Browse uses yt-dlp: no units)
+DAILY_UPLOADS = 5  # owner, 2026-10-13: a safe cap (5 × 1,600 = 8,000 of the 9,800-unit budget); more wait a day
 
 
 class YouTubeError(Exception):
@@ -101,6 +103,13 @@ async def disconnect():
         except httpx.HTTPError:
             pass
     db.kv_set("youtube_auth", {})
+
+
+def next_reset() -> float:
+    """When Google's quota day starts again (midnight Pacific = 14:00/15:00 WIB)."""
+    pac = ZoneInfo("America/Los_Angeles")
+    tomorrow = datetime.now(pac).date() + timedelta(days=1)
+    return datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=pac).timestamp()
 
 
 def uploads_left() -> int:

@@ -206,6 +206,15 @@ def test_youtube_connect_upload_and_limits(state, monkeypatch):
     assert len(calls) == 1
     db.usage_add("yt_uploads", youtube.DAILY_UPLOADS, db.google_day())  # counted on Google's day
     assert youtube.uploads_left() == 0
+    # cap reached: the next Short waits for Google's new day instead of failing
+    cid2 = make_clip(state)
+    db.execute("INSERT INTO posts(clip_id, platform, status, created_at, updated_at) VALUES(?,?,?,?,?)",
+               (cid2, "youtube", "queued", db.now(), db.now()))
+    db.execute("UPDATE posts SET posted_at=0")  # no 90-s spacing in the way
+    assert asyncio.run(publish.run_one())
+    p2 = db.one("SELECT * FROM posts WHERE clip_id=? AND platform='youtube'", (cid2,))
+    assert p2["status"] == "queued" and p2["not_before"] > time.time() + 60 and len(calls) == 1
+    assert p2["not_before"] >= youtube.next_reset()
     db.execute("DELETE FROM usage")
     db.usage_add("yt_units", 9000, db.google_day())  # the shared budget also limits uploads
     assert youtube.uploads_left() == 0
