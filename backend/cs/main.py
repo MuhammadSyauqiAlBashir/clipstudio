@@ -290,6 +290,28 @@ def line_position(job: dict) -> str:
     return " ".join(parts)
 
 
+# Downloader (yt-dlp) errors → what happened and what to do, in plain words.
+FETCH_REASONS = (
+    ("http error 403", "YouTube refused the download (error 403). This is usually temporary — tap ↻ Retry, or try "
+                       "again in a few hours."),
+    ("http error 429", "YouTube is limiting downloads from the server right now — tap ↻ Retry in a few hours."),
+    ("sign in to confirm your age", "The video is age-restricted, so it can't be downloaded."),
+    ("not a bot", "YouTube asked the server to sign in (\"not a bot\") — tap ↻ Retry later."),
+    ("private video", "The video is private."),
+    ("members-only", "The video is for channel members only."),
+    ("join this channel", "The video is for channel members only."),
+    ("video unavailable", "The video isn't available (deleted, blocked or region-locked)."),
+    ("this live event will begin", "The live stream hasn't started yet."),
+    ("requested format is not available", "YouTube didn't offer a downloadable version — tap ↻ Retry later."),
+    ("stalled", "The download stopped moving for 10 minutes — tap ↻ Retry."),
+)
+
+
+def fetch_reason(raw: str) -> str:
+    r = (raw or "").lower()
+    return next((text for key, text in FETCH_REASONS if key in r), "")
+
+
 def source_state(s: dict, job: dict | None, counts: dict | None = None) -> dict:
     """One clear status for a video: a short label, a chip colour, a plain sentence and whether it's working now."""
     st, step = s["status"], s.get("step") or ""
@@ -334,8 +356,9 @@ def source_state(s: dict, job: dict | None, counts: dict | None = None) -> dict:
     if st == "done":
         return {"label": "Done", "kind": "", "active": False, "text": s.get("reason") or "Finished; all clips decided."}
     if st == "failed":
+        plain = fetch_reason(s.get("reason", ""))
         return {"label": "❌ Failed", "kind": "bad", "active": False,
-                "text": f"{s.get('reason') or 'It stopped with an error.'} Open it and tap ↻ Retry to try again."}
+                "text": plain or f"{s.get('reason') or 'It stopped with an error.'} Open it and tap ↻ Retry to try again."}
     if st == "rejected_by_gate":
         return {"label": "🚫 Refused", "kind": "bad", "active": False,
                 "text": f"Not processed: {s.get('reason') or 'it did not pass the checks'}"}
@@ -601,11 +624,10 @@ async def retry_source(sid: int, s: Session = Depends(current)):
     src = get_source(sid)
     if src["status"] not in ("failed",):
         raise HTTPException(400, "Only failed sources can be retried.")
-    if src["files_deleted"]:
-        raise HTTPException(400, "This source's files were already cleaned up; add the link again.")
     if db.one("SELECT 1 FROM jobs WHERE source_id=? AND status IN ('queued','running')", (sid,)):
         raise HTTPException(409, "Already queued.")
-    pipeline.set_source(sid, status="queued", reason="", step="")
+    # A failed video's leftovers are cleaned up soon after it fails; Retry then simply downloads it again.
+    pipeline.set_source(sid, status="queued", reason="", step="", files_deleted=0, file="", progress=0)
     db.enqueue("process", source_id=sid, priority=20)
     return {"ok": True}
 

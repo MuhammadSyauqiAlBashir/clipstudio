@@ -241,3 +241,11 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   until approved (`tiktok.private_only()`); `video.list` → hourly TikTok stats by video id + Stats card "Your latest
   TikTok videos" (`/api/tiktok/videos`, 10-min cache). Guides: `~/work/clipstudio-tiktok-round2.md` (portal steps),
   `~/work/clipstudio-tiktok-round2-review.md` (recording script + review texts). 53 tests.
+- 2026-10-12 — YouTube "HTTP Error 403: Forbidden" during download (5 of ~140 YouTube videos in a week; the same video
+  downloads fine later): yt-dlp 2026.08.19 (latest stable; nightly 2026.10.10 exists) runs with no PO-token provider,
+  so YouTube sometimes cuts long downloads off. Failed videos couldn't be retried: cleanup marks them
+  `files_deleted=1` and Retry refused. Now Retry re-downloads from scratch (resets `files_deleted`/`file`), and
+  download errors get plain reasons (`main.fetch_reason`: 403 temporary → Retry, 429, age-restricted, private,
+  members-only, unavailable, not started, stalled); raw text under "Details" on the video page. YouTube RSS feeds
+  answer 404/500 (YouTube's side); WebSub push still detects uploads. Not done (owner to decide): auto-retry of 403
+  downloads, yt-dlp nightly, PO-token provider plugin. 54 tests.
