@@ -417,6 +417,10 @@ async def queue_state(s: Session = Depends(current)):
                 state = f"Scheduled for {when}"
             else:
                 state = "Posts within a few minutes (one at a time, 90 s apart per platform)"
+        if p["platform"] == "youtube" and p["status"] == "queued" and not (p["ppaused"] or p["paused"]) \
+                and youtube.uploads_left() <= 0:
+            state = (f"Today's {youtube.DAILY_UPLOADS} YouTube uploads are used — continues by itself after 14:00 WIB "
+                     f"({datetime.fromtimestamp(youtube.next_reset(), config.TZ).strftime('%a %H:%M')})")
         if p["platform"] == "tiktok" and p["status"] == "queued":
             state += " · goes to your TikTok inbox as a draft"
         posts.append({"id": p["id"], "clip_id": p["clip_id"], "platform": p["platform"], "hook": p["hook"],
@@ -1060,8 +1064,8 @@ async def accounts(s: Session = Depends(current)):
                               "Approved clips go to your TikTok inbox as drafts; you post them in the TikTok app."},
            "youtube": {"connected": youtube.connected(), "username": youtube.auth().get("channel", ""), "error": "",
                        "can_connect": youtube.configured(),
-                       "note": f"Until Google's audit passes, uploads are locked private, so keep auto-post off and "
-                               f"share from the phone. {youtube.uploads_left()} of {youtube.DAILY_UPLOADS} uploads left today."}}
+                       "note": f"Shorts go up public, at most {youtube.DAILY_UPLOADS} a day (more wait until 14:00 WIB). "
+                               f"{youtube.uploads_left()} of {youtube.DAILY_UPLOADS} uploads left today."}}
     for k, v in out.items():
         v["autopost"] = bool(auto.get(k))
     return {"accounts": out}

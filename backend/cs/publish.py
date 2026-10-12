@@ -228,6 +228,8 @@ async def facebook_reel(post: dict, clip: dict, caption: str):
 async def youtube_short(post: dict, clip: dict, caption: str, src: dict):
     if post["remote_id"]:  # uploaded already (a retry after a crash): never upload twice
         return post["remote_id"], f"https://www.youtube.com/shorts/{post['remote_id']}"
+    if youtube.uploads_left() <= 0:  # today's safe cap is used: wait for Google's next day (not a failure)
+        raise Later(youtube.next_reset() + 120, "YouTube's daily cap is used")
     tags = [w for w in caption.split() if w.startswith("#")]
     lang = {"indonesian": "id", "english": "en"}.get((src.get("language") or "").lower(), "")
     v = await youtube.upload(Path(clip["final"]), clip["hook"] or src.get("title", ""), caption, tags, lang)

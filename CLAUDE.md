@@ -115,9 +115,10 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
 - [ ] Channel/campaign list → Channels tab (in More since 2026-10-04). Campaign shortlist: `~/work/clipstudio-campaigns.md`
       (Clippo, TryBuzzer, AyoKlip, Whop).
 - [x] TikTok round 1 (inbox drafts) approved 2026-10-08; production keys saved, owner reconnects TikTok on the phone.
-- [ ] TikTok round 2 (Direct Post + video.list): record the demo with the Test app per
-      `~/work/clipstudio-tiktok-round2-review.md`, then submit the saved production revision. After approval: Claude
-      sets `tiktok_direct_approved`, owner reconnects (Approved app) and picks Direct Post.
+- [x] TikTok round 2 (Direct Post + video.list) **submitted 2026-10-12** (demo `~/work/ttrec/tiktok-demo-round2.mp4`,
+      Test-app Direct Post of clip #5 "Only me" + Stats video.list). Waiting for TikTok's email. After approval: Claude
+      sets `tiktok_direct_approved`, owner reconnects (Approved app) and picks Direct Post. Rejected → fix + resubmit
+      (round 1 inbox drafts keep working).
 - Done 2026-10-04: interview; Groq + YouTube keys; Biznet traffic unlimited; throwaway cookies; review flow tested;
   test data deleted; brand **bashclipeveryday** (clip Gmail bashclip.everyday@gmail.com); Instagram Meta app + token.
 
@@ -249,3 +250,9 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   members-only, unavailable, not started, stalled); raw text under "Details" on the video page. YouTube RSS feeds
   answer 404/500 (YouTube's side); WebSub push still detects uploads. Not done (owner to decide): auto-retry of 403
   downloads, yt-dlp nightly, PO-token provider plugin. 54 tests.
+- 2026-10-12 — TikTok round 2 demo edited from the owner's two iPhone recordings (306 MB → 17 MB, 2:53, 720×1560
+  H.264; cut idle parts; Stats/video.list part appended) and **submitted** by the owner. YouTube audit checked: the
+  `videos.insert` reference now says "Videos uploaded from unverified API projects are not restricted to private
+  viewing mode", and our 5 API Shorts (2026-10-05) are still public; the audit form (yt_api_form) now only offers
+  quota audits (more than 10,000 units/day), which we don't need (≤6 uploads/day) → not submitted, recommended to the
+  owner to skip it (an audit also reviews the whole project, incl. how source videos are obtained).
