@@ -59,4 +59,5 @@ YT_DAILY_UNITS = int(os.environ.get("CS_YT_DAILY_UNITS", "9800"))          # fre
 MAX_SOURCE_HOURS = float(os.environ.get("CS_MAX_SOURCE_HOURS", "4"))       # VODs and live recordings
 KEEP_SOURCE_DAYS = 7
 KEEP_CLIP_DAYS = 30
+KEEP_POSTED_EVERYWHERE_DAYS = 3  # a final posted on every auto-post platform has no more use (owner, 2026-10-13)
 FFMPEG_THREADS = os.environ.get("CS_FFMPEG_THREADS", "2")

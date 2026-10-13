@@ -225,6 +225,28 @@ def test_cleanup_rules(tmp_path, monkeypatch):
     assert db.one("SELECT status FROM clips WHERE id=?", (oc,))["status"] == "expired"
 
 
+def test_final_removed_3_days_after_posted_everywhere(tmp_path, monkeypatch):
+    from cs import db, pipeline, publish
+    monkeypatch.setattr(publish, "autopost_enabled", lambda p: p in ("instagram", "facebook", "tiktok"))
+    now = db.now()
+    sid = db.insert("sources", {"status": "done", "files_deleted": 1, "created_at": now, "updated_at": now})
+
+    def clip(posted, days):
+        f = tmp_path / f"final{len(posted)}{days}.mp4"
+        f.write_bytes(b"x")
+        cid = db.insert("clips", {"source_id": sid, "start": 0, "end": 1, "status": "posted", "final": str(f),
+                                  "posted": db.jdump(posted), "created_at": now, "updated_at": now - days * 86400})
+        return cid, f
+    all3 = {"instagram": "u", "facebook": "u", "tiktok": "posted"}
+    done, f1 = clip(all3, 4)
+    recent, f2 = clip(all3, 1)                                    # posted everywhere, but only a day ago
+    fb_missing, f3 = clip({"instagram": "u", "tiktok": "posted"}, 4)  # e.g. Facebook failed: keep for a retry
+    pipeline.cleanup()
+    assert not f1.exists() and db.one("SELECT final FROM clips WHERE id=?", (done,))["final"] == ""
+    assert f2.exists() and f3.exists()
+    assert db.one("SELECT final FROM clips WHERE id=?", (fb_missing,))["final"] == str(f3)
+
+
 # ---- transcription backup -------------------------------------------------------------------------------
 def test_deepgram_takes_over_when_groq_allowance_is_used(tmp_path, monkeypatch):
     import asyncio
