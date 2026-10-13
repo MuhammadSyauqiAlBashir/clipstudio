@@ -322,7 +322,8 @@ async def record(source_id: int, stop: asyncio.Event | None = None):
 
 
 # ---------------------------------------------------------------------------------------------------------
-# Cleanup (owner's rules: delete sources when every clip is decided or after 7 days; clips 30 days after done)
+# Cleanup (owner's rules: delete sources when every clip is decided or after 7 days; finals 3 days after
+# they're posted everywhere, otherwise 30 days after done)
 # ---------------------------------------------------------------------------------------------------------
 def cleanup():
     now = db.now()
@@ -350,3 +351,15 @@ def cleanup():
                     "updated_at < ?", (now - config.KEEP_CLIP_DAYS * 86400,)):
         Path(c["final"]).unlink(missing_ok=True)
         db.update("clips", c["id"], {"final": ""})
+    # Posted on every platform that auto-posts (TikTok counts once it's marked posted, not when the draft arrives):
+    # nothing left to retry, post or resend, so the final goes after a few days. A clip with a failed or missing
+    # platform keeps it for the 30 days above, so it can still be retried.
+    from . import publish
+    wanted = [p for p in publish.PLATFORMS if publish.autopost_enabled(p)]
+    for c in db.all("SELECT * FROM clips WHERE final!='' AND status='posted' AND updated_at < ?",
+                    (now - config.KEEP_POSTED_EVERYWHERE_DAYS * 86400,)) if wanted else []:
+        posted = db.jload(c["posted"], {}) or {}
+        busy = db.one("SELECT 1 FROM posts WHERE clip_id=? AND status IN ('queued','uploading','processing')", (c["id"],))
+        if all(posted.get(p) for p in wanted) and not busy:
+            Path(c["final"]).unlink(missing_ok=True)
+            db.update("clips", c["id"], {"final": ""})

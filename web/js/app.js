@@ -555,6 +555,8 @@ async function openClip(id) {
         el("p", { class: "hint", text: "On iPhone: Save / share → Save Video puts it in Photos; or share straight to TikTok/Instagram." }))
     } else if (c.status === "approved" || c.status === "rendering") {
       finalBox.replaceChildren(el("p", { class: "muted", text: c.status === "rendering" ? "⚙️ Making the full-quality version now…" : "⏳ Waiting to make the full-quality version…" }))
+    } else if (c.status === "posted" || c.status === "rejected") {
+      finalBox.replaceChildren(el("p", { class: "hint", text: "The full-quality file was removed to save space (posted everywhere after 3 days, otherwise after 30 days)." }))
     } else finalBox.replaceChildren()
   }
 

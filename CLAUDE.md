@@ -256,3 +256,13 @@ Guides: `~/work/clipstudio-owner-setup.md` (accounts), `~/work/clipstudio-autopo
   viewing mode", and our 5 API Shorts (2026-10-05) are still public; the audit form (yt_api_form) now only offers
   quota audits (more than 10,000 units/day), which we don't need (≤6 uploads/day) → not submitted, recommended to the
   owner to skip it (an audit also reviews the whole project, incl. how source videos are obtained).
+- 2026-10-13 — YouTube capped at **5 Shorts a day** (owner): a 6th waits for Google's next day (`youtube.next_reset()`,
+  `publish.Later`) instead of failing; queue row says so; YouTube auto-post still OFF (owner switches it in More).
+  Facebook/YouTube near-zero views checked: Graph API `views` 16 total for 86 FB reels (Instagram 9,287 for 121 with
+  the same clips), no copyright matches, Page 0 followers / unverified / after Meta's spam limit; YouTube 5 public
+  processed Shorts, 2 views, 0 subscribers → distribution, not our counting (FB Reels plays need `read_insights`).
+- 2026-10-13 — Storage: finals = ~75% of disk (~35 MB each). New rule (owner): a final is deleted
+  **3 days after it is posted on every platform that auto-posts** (`config.KEEP_POSTED_EVERYWHERE_DAYS`; TikTok counts
+  once marked posted, not when the draft arrives); a clip with a failed/missing platform keeps it 30 days for retries.
+  Clip pop-up says when the file was removed. First run removed 69 finals (2.45 GB). 55 tests.
+
